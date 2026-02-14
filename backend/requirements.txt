@@ -5,3 +5,6 @@ psycopg[binary]==3.2.3
 redis==5.2.0
 celery==5.4.0
 pydantic-settings==2.6.1
+alembic==1.14.0
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4

@@ -1,6 +1,6 @@
 # Control Center - SaaS Bootstrap
 
-Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQL, Redis, and Celery.
+Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQL, Redis, Celery, and Alembic migrations.
 
 ## Stack
 
@@ -10,22 +10,8 @@ Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQ
 - SQLAlchemy 2.x
 - Redis
 - Celery
+- Alembic
 - Docker + Docker Compose
-
-## Repository Structure
-
-```text
-backend/
-  app/
-    core/
-    domain/
-    application/
-    infrastructure/
-    interfaces/
-  workers/
-  main.py
-frontend/
-```
 
 ## Quick Start
 
@@ -41,16 +27,27 @@ cp .env.example .env
 docker compose up --build
 ```
 
-3. Verify health endpoint:
+3. Verify endpoints:
 
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/tenant/context
 ```
 
-Expected response:
+The backend container runs `alembic upgrade head` before API startup.
 
-```json
-{"status":"ok","services":{"api":"up","database":"up","redis":"up"}}
+## Auth Skeleton
+
+- `POST /auth/register` (requires `X-Tenant-ID` header)
+- `POST /auth/login` (requires `X-Tenant-ID` header)
+- `GET /auth/me` (requires Bearer token)
+
+## Tenant Context
+
+Set the tenant on each request with header:
+
+```text
+X-Tenant-ID: <company-uuid>
 ```
 
 ## Local Backend Development (optional)
@@ -60,5 +57,6 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn main:app --reload
 ```
