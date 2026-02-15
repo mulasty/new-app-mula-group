@@ -174,3 +174,119 @@ export type ConnectorAvailability = {
   oauth_start_path?: string;
   available: boolean;
 };
+
+export type CampaignStatus = "draft" | "active" | "paused" | "archived";
+
+export type Campaign = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  status: CampaignStatus;
+  timezone: string;
+  language: string;
+  brand_profile_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationTriggerType = "cron" | "interval" | "event";
+export type AutomationActionType = "generate_post" | "schedule_post" | "publish_now" | "sync_metrics";
+
+export type AutomationRule = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  campaign_id?: string | null;
+  name: string;
+  is_enabled: boolean;
+  trigger_type: AutomationTriggerType;
+  trigger_config_json: Record<string, unknown>;
+  action_type: AutomationActionType;
+  action_config_json: Record<string, unknown>;
+  guardrails_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContentTemplate = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  name: string;
+  template_type: "post_text" | "carousel_plan" | "video_script";
+  prompt_template: string;
+  output_schema_json: Record<string, unknown>;
+  default_values_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContentItemStatus =
+  | "draft"
+  | "needs_review"
+  | "approved"
+  | "rejected"
+  | "scheduled"
+  | "published"
+  | "failed";
+
+export type ContentItem = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  campaign_id?: string | null;
+  template_id?: string | null;
+  status: ContentItemStatus;
+  title?: string | null;
+  body: string;
+  metadata_json: Record<string, unknown>;
+  source: "ai" | "manual";
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationRunStatus = "queued" | "running" | "success" | "partial" | "failed";
+
+export type AutomationRun = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  rule_id: string;
+  status: AutomationRunStatus;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_message?: string | null;
+  stats_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AutomationEventItem = {
+  id: string;
+  company_id: string;
+  project_id: string;
+  run_id: string;
+  event_type: string;
+  status: "ok" | "error";
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type CalendarPayload = {
+  posts: Array<{
+    id: string;
+    project_id: string;
+    title: string;
+    status: string;
+    publish_at?: string | null;
+  }>;
+  content_items: Array<{
+    id: string;
+    project_id: string;
+    title?: string | null;
+    status: string;
+    created_at: string;
+    scheduled_for?: string | null;
+  }>;
+};
