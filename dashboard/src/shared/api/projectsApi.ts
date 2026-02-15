@@ -2,12 +2,13 @@ import { api } from "@/shared/api/client";
 import { isEndpointMissing } from "@/shared/api/errors";
 import { addMockItem, getMockCollection } from "@/shared/api/mockStore";
 import { runtimeConfig } from "@/shared/config/runtime";
-import { CreateResult, ListResult, Project } from "@/shared/api/types";
+import { ApiListEnvelope, CreateResult, ListResult, Project } from "@/shared/api/types";
 
 export async function listProjects(tenantId: string): Promise<ListResult<Project>> {
   try {
-    const response = await api.get<Project[]>("/projects");
-    return { items: response.data, source: "api", backendMissing: false };
+    const response = await api.get<Project[] | ApiListEnvelope<Project>>("/projects");
+    const items = Array.isArray(response.data) ? response.data : response.data.items;
+    return { items, source: "api", backendMissing: false };
   } catch (error) {
     // TODO: remove mock fallback when backend GET /projects is guaranteed in all environments.
     if (runtimeConfig.featureFlags.enableMockFallback && isEndpointMissing(error)) {

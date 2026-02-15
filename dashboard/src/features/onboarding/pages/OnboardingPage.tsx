@@ -5,9 +5,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
 import { useOnboardingStatus } from "@/features/onboarding/hooks/useOnboardingStatus";
-import { createChannel } from "@/shared/api/channelsApi";
-import { createPost } from "@/shared/api/postsApi";
+import { createWebsiteChannel } from "@/shared/api/channelsApi";
+import { createPost, schedulePost } from "@/shared/api/postsApi";
 import { createProject } from "@/shared/api/projectsApi";
+import { PostStatus } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { Button } from "@/shared/components/ui/Button";
@@ -26,6 +27,7 @@ export function OnboardingPage(): JSX.Element {
     recommendedStep,
     isComplete,
     hasResourceData,
+    projectsQuery,
     completeOnboarding,
     skipForNow,
     resumeOnboarding,
@@ -42,19 +44,28 @@ export function OnboardingPage(): JSX.Element {
 
   const [tenantInput, setTenantInput] = useState(tenantId);
   const [projectName, setProjectName] = useState("");
-  const [channelType, setChannelType] = useState<"website" | "facebook" | "instagram" | "youtube">("website");
-  const [channelCredentials, setChannelCredentials] = useState("{}");
+  const [projectIdDraft, setProjectIdDraft] = useState("");
+  const [channelName, setChannelName] = useState("Website");
   const [postTitle, setPostTitle] = useState("");
   const [postContent, setPostContent] = useState("");
-  const [postStatus, setPostStatus] = useState<"draft" | "scheduled" | "published">("draft");
+  const [postStatus, setPostStatus] = useState<Extract<PostStatus, "draft" | "scheduled">>("draft");
   const [postScheduledAt, setPostScheduledAt] = useState("");
   const [missingEndpointNote, setMissingEndpointNote] = useState<string | null>(null);
+
+  const currentProjectId = useMemo(
+    () => projectIdDraft || projectsQuery.data?.items?.[0]?.id || "",
+    [projectIdDraft, projectsQuery.data?.items]
+  );
 
   useEffect(() => {
     if (stepFromQuery !== step) {
       setSearchParams({ step: String(step) }, { replace: true });
     }
   }, [stepFromQuery, step, setSearchParams]);
+
+  useEffect(() => {
+    setProjectIdDraft("");
+  }, [tenantId]);
 
   useEffect(() => {
     if (isComplete) {
@@ -78,6 +89,7 @@ export function OnboardingPage(): JSX.Element {
       if (result.backendMissing) {
         setMissingEndpointNote("Backend endpoint /projects unavailable. Using local mock storage.");
       }
+      setProjectIdDraft(result.item.id);
       queryClient.invalidateQueries({ queryKey: ["projects", tenantId] });
       setProjectName("");
       setStep(3);
@@ -86,13 +98,7 @@ export function OnboardingPage(): JSX.Element {
 
   const channelMutation = useMutation({
     mutationFn: () =>
-      createChannel(
-        {
-          type: channelType,
-          credentials_json: channelCredentials,
-        },
-        tenantId
-      ),
+      createWebsiteChannel(currentProjectId, tenantId, channelName.trim() || "Website"),
     onSuccess: (result) => {
       if (result.backendMissing) {
         setMissingEndpointNote("Backend endpoint /channels unavailable. Using local mock storage.");
@@ -103,18 +109,27 @@ export function OnboardingPage(): JSX.Element {
   });
 
   const postMutation = useMutation({
-    mutationFn: () =>
-      createPost(
+    mutationFn: async () => {
+      const created = await createPost(
         {
+          project_id: currentProjectId,
           title: postTitle.trim(),
           content: postContent.trim(),
-          status: postStatus,
-          scheduled_at: postScheduledAt || undefined,
+          status: "draft",
         },
         tenantId
-      ),
+      );
+
+      if (postStatus === "scheduled") {
+        const scheduledAtIso = postScheduledAt ? new Date(postScheduledAt).toISOString() : new Date().toISOString();
+        const scheduled = await schedulePost(created.item.id, scheduledAtIso, tenantId);
+        return { created, scheduled };
+      }
+
+      return { created, scheduled: null };
+    },
     onSuccess: (result) => {
-      if (result.backendMissing) {
+      if (result.created.backendMissing || result.scheduled?.backendMissing) {
         setMissingEndpointNote("Backend endpoint /posts unavailable. Using local mock storage.");
       }
       queryClient.invalidateQueries({ queryKey: ["posts", tenantId] });
@@ -237,21 +252,10 @@ export function OnboardingPage(): JSX.Element {
 
         {step === 3 ? (
           <div className="space-y-4">
-            <select
-              value={channelType}
-              onChange={(event) => setChannelType(event.target.value as typeof channelType)}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="website">Website</option>
-              <option value="facebook">Facebook</option>
-              <option value="instagram">Instagram</option>
-              <option value="youtube">YouTube</option>
-            </select>
-            <textarea
-              value={channelCredentials}
-              onChange={(event) => setChannelCredentials(event.target.value)}
-              className="min-h-36 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder='{"token":"..."}'
+            <Input
+              value={channelName}
+              onChange={(event) => setChannelName(event.target.value)}
+              placeholder="Website channel name"
             />
             <div className="flex justify-between">
               <Button type="button" className="bg-slate-600 hover:bg-slate-500" onClick={() => setStep(2)}>
@@ -259,16 +263,8 @@ export function OnboardingPage(): JSX.Element {
               </Button>
               <Button
                 type="button"
-                disabled={!tenantId}
-                onClick={() => {
-                  try {
-                    JSON.parse(channelCredentials);
-                  } catch {
-                    pushToast("credentials_json must be valid JSON", "error");
-                    return;
-                  }
-                  channelMutation.mutate();
-                }}
+                disabled={!tenantId || !currentProjectId}
+                onClick={() => channelMutation.mutate()}
               >
                 {channelMutation.isPending ? "Connecting..." : "Connect first channel"}
               </Button>
@@ -293,7 +289,6 @@ export function OnboardingPage(): JSX.Element {
               >
                 <option value="draft">draft</option>
                 <option value="scheduled">scheduled</option>
-                <option value="published">published</option>
               </select>
               <Input
                 type="datetime-local"

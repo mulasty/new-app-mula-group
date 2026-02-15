@@ -1,52 +1,79 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
-import { createChannel, listChannels } from "@/shared/api/channelsApi";
+import { useToast } from "@/app/providers/ToastProvider";
+import { createWebsiteChannel, listChannels } from "@/shared/api/channelsApi";
+import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
+import { listProjects } from "@/shared/api/projectsApi";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
+import { Spinner } from "@/shared/components/ui/Spinner";
+import { getActiveProjectId } from "@/shared/utils/storage";
 
 export function ChannelsPage(): JSX.Element {
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const { tenantId } = useTenant();
 
-  const [type, setType] = useState<"website" | "facebook" | "instagram" | "youtube">("website");
-  const [credentialsJson, setCredentialsJson] = useState("{}");
+  const [activeProjectId, setActiveProject] = useState("");
+  const [channelName, setChannelName] = useState("Website");
 
-  const channelsQuery = useQuery({
-    queryKey: ["channels", tenantId],
-    queryFn: () => listChannels(tenantId),
+  useEffect(() => {
+    if (!tenantId) {
+      setActiveProject("");
+      return;
+    }
+    setActiveProject(getActiveProjectId(tenantId) ?? "");
+  }, [tenantId]);
+
+  const projectsQuery = useQuery({
+    queryKey: ["projects", tenantId],
+    queryFn: () => listProjects(tenantId),
     enabled: Boolean(tenantId),
   });
 
+  const channelsQuery = useQuery({
+    queryKey: ["channels", tenantId, activeProjectId],
+    queryFn: () => listChannels(tenantId, activeProjectId),
+    enabled: Boolean(tenantId && activeProjectId),
+  });
+
   const createMutation = useMutation({
-    mutationFn: () => createChannel({ type, credentials_json: credentialsJson }, tenantId),
+    mutationFn: () => createWebsiteChannel(activeProjectId, tenantId, channelName.trim() || "Website"),
     onSuccess: (created) => {
-      queryClient.setQueryData(["channels", tenantId], (current: { items?: unknown[]; source?: string } | undefined) => ({
+      queryClient.setQueryData(["channels", tenantId, activeProjectId], (current: { items?: unknown[]; source?: string } | undefined) => ({
         items: [created.item, ...(current?.items ?? [])],
         source: created.source,
         backendMissing: created.backendMissing,
       }));
-      setCredentialsJson("{}");
+      pushToast("Website channel connected", "success");
+    },
+    onError: (error) => {
+      pushToast(getApiErrorMessage(error, "Failed to connect channel"), "error");
     },
   });
 
-  const jsonError = useMemo(() => {
-    try {
-      JSON.parse(credentialsJson);
-      return null;
-    } catch {
-      return "credentials_json must be valid JSON";
-    }
-  }, [credentialsJson]);
-
   return (
     <div className="space-y-6">
-      <PageHeader title="Channels" description="Connect social and website channels for distribution." />
+      <PageHeader
+        title="Channels"
+        description="Connect website channels per project for publishing."
+        actions={
+          <ProjectSwitcher
+            tenantId={tenantId}
+            projects={projectsQuery.data?.items ?? []}
+            value={activeProjectId}
+            onChange={setActiveProject}
+            disabled={projectsQuery.isLoading}
+          />
+        }
+      />
 
       {!tenantId ? (
         <EmptyState
@@ -57,38 +84,51 @@ export function ChannelsPage(): JSX.Element {
         />
       ) : (
         <>
+          {!activeProjectId ? (
+            <EmptyState
+              title="Select project first"
+              description="Channel connection is project-scoped."
+              actionLabel="Create project"
+              onAction={() => navigate("/app/projects")}
+            />
+          ) : null}
+
           <Card title="Connect channel">
-            <div className="grid gap-3 md:grid-cols-3">
-              <select
-                value={type}
-                onChange={(event) => setType(event.target.value as typeof type)}
+            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <input
+                value={channelName}
+                onChange={(event) => setChannelName(event.target.value)}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="website">Website</option>
-                <option value="facebook">Facebook</option>
-                <option value="instagram">Instagram</option>
-                <option value="youtube">YouTube</option>
-              </select>
-              <textarea
-                value={credentialsJson}
-                onChange={(event) => setCredentialsJson(event.target.value)}
-                className="min-h-[44px] rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Channel name"
               />
-              <Button type="button" disabled={Boolean(jsonError)} onClick={() => createMutation.mutate()}>
-                Connect
+              <Button
+                type="button"
+                disabled={!activeProjectId || createMutation.isPending}
+                onClick={() => createMutation.mutate()}
+              >
+                {createMutation.isPending ? "Connecting..." : "Connect website channel"}
               </Button>
             </div>
-            {jsonError ? <div className="mt-2 text-xs text-red-600">{jsonError}</div> : null}
           </Card>
+
+          {isEndpointMissing(channelsQuery.error) ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              Endpoint not available yet. Channel list cannot be loaded.
+            </div>
+          ) : null}
 
           {channelsQuery.data?.backendMissing ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Backend endpoint missing. Showing mock channels from local storage.
+              Endpoint not available yet. Showing mock channels from local storage.
             </div>
           ) : null}
 
           <Card title="Connected channels">
-            {(channelsQuery.data?.items.length ?? 0) === 0 ? (
+            {channelsQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Spinner /> Loading channels...
+              </div>
+            ) : (channelsQuery.data?.items.length ?? 0) === 0 ? (
               <EmptyState
                 title="No channels connected"
                 description="Connect your first channel to schedule and publish posts."
@@ -100,12 +140,17 @@ export function ChannelsPage(): JSX.Element {
                 {(channelsQuery.data?.items ?? []).map((channel) => (
                   <li key={channel.id} className="rounded-md border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
-                      <div className="font-semibold capitalize">{channel.type}</div>
+                      <div>
+                        <div className="font-semibold capitalize">{channel.name ?? channel.type}</div>
+                        <div className="text-xs text-slate-500">Type: {channel.type}</div>
+                      </div>
                       {channelsQuery.data?.source === "mock" ? (
                         <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">mock</span>
                       ) : null}
                     </div>
-                    <pre className="mt-2 overflow-auto rounded bg-slate-100 p-2 text-xs">{channel.credentials_json}</pre>
+                    <div className="mt-2 text-xs text-slate-500">
+                      Status: <span className="font-medium capitalize text-slate-700">{channel.status ?? "active"}</span>
+                    </div>
                   </li>
                 ))}
               </ul>

@@ -18,6 +18,17 @@ type ClientHandlers = {
 let handlers: ClientHandlers = {};
 let refreshAttempted = false;
 
+function getErrorMessage(error: AxiosError): string {
+  const detail =
+    error.response?.data && typeof error.response.data === "object"
+      ? (error.response.data as { detail?: unknown }).detail
+      : undefined;
+  if (typeof detail === "string" && detail.trim().length > 0) {
+    return detail;
+  }
+  return "Request failed";
+}
+
 export function registerClientHandlers(nextHandlers: ClientHandlers): void {
   handlers = nextHandlers;
 }
@@ -91,7 +102,10 @@ api.interceptors.response.use(
     }
 
     if (error.response && error.response.status >= 400 && error.response.status !== 401) {
-      handlers.onApiError?.("Request failed");
+      // Missing endpoints are handled with explicit in-page banners.
+      if (![404, 405, 501].includes(error.response.status)) {
+        handlers.onApiError?.(getErrorMessage(error));
+      }
     }
 
     return Promise.reject(error);

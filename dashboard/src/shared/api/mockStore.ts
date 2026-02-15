@@ -43,3 +43,23 @@ export function addMockItem<T extends { id: string }>(tenantId: string, key: key
   writeBucket(tenantId, { ...bucket, [key]: next });
   return item;
 }
+
+export function updateMockItem<T extends { id: string }>(
+  tenantId: string,
+  key: keyof MockBucket,
+  id: string,
+  updater: (current: T) => T
+): T | null {
+  const bucket = readBucket(tenantId);
+  const collection = bucket[key] as T[];
+  const index = collection.findIndex((row) => row.id === id);
+  if (index === -1) {
+    return null;
+  }
+
+  const nextItem = updater(collection[index]);
+  const nextCollection = [...collection];
+  nextCollection[index] = nextItem;
+  writeBucket(tenantId, { ...bucket, [key]: nextCollection });
+  return nextItem;
+}

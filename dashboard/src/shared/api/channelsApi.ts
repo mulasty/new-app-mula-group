@@ -2,22 +2,26 @@ import { api } from "@/shared/api/client";
 import { isEndpointMissing } from "@/shared/api/errors";
 import { addMockItem, getMockCollection } from "@/shared/api/mockStore";
 import { runtimeConfig } from "@/shared/config/runtime";
-import { Channel, CreateResult, ListResult } from "@/shared/api/types";
+import { ApiListEnvelope, Channel, CreateResult, ListResult } from "@/shared/api/types";
 
 type CreateChannelPayload = {
-  type: Channel["type"];
-  credentials_json: string;
+  project_id: string;
+  type: "website";
+  name?: string;
 };
 
-export async function listChannels(tenantId: string): Promise<ListResult<Channel>> {
+export async function listChannels(tenantId: string, projectId?: string): Promise<ListResult<Channel>> {
   try {
-    const response = await api.get<Channel[]>("/channels");
-    return { items: response.data, source: "api", backendMissing: false };
+    const params = projectId ? { project_id: projectId } : undefined;
+    const response = await api.get<Channel[] | ApiListEnvelope<Channel>>("/channels", { params });
+    const items = Array.isArray(response.data) ? response.data : response.data.items;
+    return { items, source: "api", backendMissing: false };
   } catch (error) {
     // TODO: remove mock fallback when backend GET /channels is available.
     if (runtimeConfig.featureFlags.enableMockFallback && isEndpointMissing(error)) {
+      const allChannels = getMockCollection<Channel>(tenantId, "channels");
       return {
-        items: getMockCollection<Channel>(tenantId, "channels"),
+        items: projectId ? allChannels.filter((row) => row.project_id === projectId) : allChannels,
         source: "mock",
         backendMissing: true,
       };
@@ -39,8 +43,10 @@ export async function createChannel(
       const item: Channel = {
         id: crypto.randomUUID(),
         company_id: tenantId,
+        project_id: payload.project_id,
         type: payload.type,
-        credentials_json: payload.credentials_json,
+        name: payload.name ?? "Website",
+        status: "active",
         created_at: new Date().toISOString(),
       };
       return {
@@ -51,4 +57,19 @@ export async function createChannel(
     }
     throw error;
   }
+}
+
+export async function createWebsiteChannel(
+  projectId: string,
+  tenantId: string,
+  name?: string
+): Promise<CreateResult<Channel>> {
+  return createChannel(
+    {
+      project_id: projectId,
+      type: "website",
+      name,
+    },
+    tenantId
+  );
 }

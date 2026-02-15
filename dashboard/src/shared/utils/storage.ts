@@ -3,6 +3,7 @@ export const STORAGE_KEYS = {
   refreshToken: "cc_refresh_token",
   tenantId: "cc_tenant_id",
   onboardingState: "cc_onboarding_state",
+  activeProjectByTenant: "cc_active_project_by_tenant",
 };
 
 export type OnboardingStorageState = {
@@ -48,6 +49,47 @@ export function getOnboardingState(): OnboardingStorageState {
 
 export function setOnboardingState(state: OnboardingStorageState): void {
   localStorage.setItem(STORAGE_KEYS.onboardingState, JSON.stringify(state));
+}
+
+type ActiveProjectMap = Record<string, string>;
+
+function getActiveProjectMap(): ActiveProjectMap {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.activeProjectByTenant);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as ActiveProjectMap;
+    return typeof parsed === "object" && parsed ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getActiveProjectId(tenantId: string): string | null {
+  if (!tenantId) {
+    return null;
+  }
+  const map = getActiveProjectMap();
+  return map[tenantId] ?? null;
+}
+
+export function setActiveProjectId(tenantId: string, projectId: string): void {
+  if (!tenantId) {
+    return;
+  }
+  const map = getActiveProjectMap();
+  map[tenantId] = projectId;
+  localStorage.setItem(STORAGE_KEYS.activeProjectByTenant, JSON.stringify(map));
+}
+
+export function clearActiveProjectId(tenantId: string): void {
+  if (!tenantId) {
+    return;
+  }
+  const map = getActiveProjectMap();
+  delete map[tenantId];
+  localStorage.setItem(STORAGE_KEYS.activeProjectByTenant, JSON.stringify(map));
 }
 
 export function clearSessionStorage(): void {
