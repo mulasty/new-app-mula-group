@@ -44,6 +44,18 @@ curl -X POST http://localhost:8000/auth/login \
   -d '{"email":"owner@test.local","password":"secret123"}'
 ```
 
+## Publishing Flow Smoke (Phase-4)
+
+```bash
+cd backend
+python scripts/test_publish_flow.py
+```
+
+The script creates tenant/project/channel/post, schedules immediate publish, waits for worker result, and verifies:
+- `/posts` status is `published`
+- `/posts/{id}/timeline` contains publish events
+- `/website/publications` contains the published record
+
 ## Useful Dev Commands
 
 ```bash

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -36,3 +36,12 @@ def health_check() -> dict:
             "redis": redis_status,
         },
     }
+
+
+@router.get("/ready", status_code=status.HTTP_200_OK)
+def readiness_check(response: Response) -> dict:
+    payload = health_check()
+    if payload["services"]["database"] != "up" or payload["services"]["redis"] != "up":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_ready", "services": payload["services"]}
+    return {"status": "ready", "services": payload["services"]}

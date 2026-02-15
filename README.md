@@ -57,6 +57,41 @@ VITE_PROXY_TARGET=http://localhost:8000
 - `GET /auth/me` requires Bearer access token
 - `POST /projects` requires role `Owner` or `Admin`
 
+## Publishing Engine (Phase-4 Vertical Slice)
+
+Tenant-scoped publishing endpoints require:
+- `Authorization: Bearer <access_token>`
+- `X-Tenant-ID: <company-uuid>`
+
+Implemented endpoints:
+- `POST /channels` (website only; create or return existing)
+- `GET /channels?project_id=...`
+- `POST /posts`
+- `GET /posts?project_id=...&status=...`
+- `PATCH /posts/{id}`
+- `POST /posts/{id}/schedule`
+- `POST /posts/{id}/publish-now`
+- `GET /posts/{id}/timeline`
+- `GET /website/publications?project_id=...`
+- `GET /ready` (DB + Redis readiness)
+
+Background services:
+- `worker` runs publish tasks
+- `beat` runs scheduler every 30 seconds and enqueues due posts
+
+Start full stack (including beat):
+
+```bash
+docker compose up --build
+```
+
+Run end-to-end publish flow smoke script:
+
+```bash
+cd backend
+python scripts/test_publish_flow.py
+```
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import schedule
 
 from app.core.config import settings
 
@@ -14,6 +15,12 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "publish-scheduler-every-30s": {
+            "task": "workers.tasks.schedule_due_posts",
+            "schedule": schedule(30.0),
+        }
+    },
 )
 
 celery_app.autodiscover_tasks(["workers"])

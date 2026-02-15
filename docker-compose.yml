@@ -31,6 +31,21 @@ services:
     volumes:
       - ./backend:/app
 
+  beat:
+    build:
+      context: ./backend
+    container_name: control-center-beat
+    env_file:
+      - .env
+    command: celery -A workers.celery_app.celery_app beat --loglevel=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
   dashboard:
     build:
       context: ./dashboard
