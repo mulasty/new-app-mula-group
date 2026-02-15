@@ -1,10 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
-import { createWebsiteChannel, getLinkedInOauthStartUrl, listChannels } from "@/shared/api/channelsApi";
+import {
+  createWebsiteChannel,
+  getLinkedInOauthStartUrl,
+  getMetaOauthStartUrl,
+  listChannels,
+  listMetaConnections,
+} from "@/shared/api/channelsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
 import { EmptyState } from "@/shared/components/EmptyState";
@@ -46,6 +52,12 @@ export function ChannelsPage(): JSX.Element {
     enabled: Boolean(tenantId && activeProjectId),
   });
 
+  const metaConnectionsQuery = useQuery({
+    queryKey: ["metaConnections", tenantId],
+    queryFn: () => listMetaConnections(),
+    enabled: Boolean(tenantId),
+  });
+
   const createMutation = useMutation({
     mutationFn: () => createWebsiteChannel(activeProjectId, tenantId, channelName.trim() || "Website"),
     onSuccess: (created) => {
@@ -74,34 +86,66 @@ export function ChannelsPage(): JSX.Element {
     },
   });
 
+  const metaMutation = useMutation({
+    mutationFn: () => getMetaOauthStartUrl(activeProjectId || undefined),
+    onSuccess: (authorizationUrl) => {
+      window.location.assign(authorizationUrl);
+    },
+    onError: (error) => {
+      pushToast(getApiErrorMessage(error, "Failed to start Meta OAuth"), "error");
+    },
+  });
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const linkedInState = params.get("linkedin");
+    const metaState = params.get("meta");
     const reason = params.get("reason");
-    if (!linkedInState) {
+    if (!linkedInState && !metaState) {
       return;
     }
 
-    if (linkedInState === "connected") {
-      setOauthFeedback({ type: "success", message: "LinkedIn account connected successfully." });
-      pushToast("LinkedIn connected", "success");
-      queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
-    } else {
-      setOauthFeedback({
-        type: "error",
-        message: reason ? `LinkedIn connection failed: ${reason}` : "LinkedIn connection failed.",
-      });
-      pushToast("LinkedIn connection failed", "error");
+    if (linkedInState) {
+      if (linkedInState === "connected") {
+        setOauthFeedback({ type: "success", message: "LinkedIn account connected successfully." });
+        pushToast("LinkedIn connected", "success");
+      } else {
+        setOauthFeedback({
+          type: "error",
+          message: reason ? `LinkedIn connection failed: ${reason}` : "LinkedIn connection failed.",
+        });
+        pushToast("LinkedIn connection failed", "error");
+      }
+    } else if (metaState) {
+      if (metaState === "connected") {
+        setOauthFeedback({ type: "success", message: "Facebook and Instagram connected successfully." });
+        pushToast("Meta connected", "success");
+      } else {
+        setOauthFeedback({
+          type: "error",
+          message: reason ? `Meta connection failed: ${reason}` : "Meta connection failed.",
+        });
+        pushToast("Meta connection failed", "error");
+      }
     }
 
+    queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
+    queryClient.invalidateQueries({ queryKey: ["metaConnections", tenantId] });
     navigate("/app/channels", { replace: true });
   }, [location.search, navigate, pushToast, queryClient, tenantId, activeProjectId]);
+
+  const hasMetaConnections = useMemo(() => {
+    return (
+      (metaConnectionsQuery.data?.facebook_pages.length ?? 0) > 0 ||
+      (metaConnectionsQuery.data?.instagram_accounts.length ?? 0) > 0
+    );
+  }, [metaConnectionsQuery.data]);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Channels"
-        description="Connect website and LinkedIn channels per project for publishing."
+        description="Connect website, LinkedIn, Facebook and Instagram channels per project."
         actions={
           <ProjectSwitcher
             tenantId={tenantId}
@@ -147,7 +191,7 @@ export function ChannelsPage(): JSX.Element {
                 {createMutation.isPending ? "Connecting..." : "Connect website channel"}
               </Button>
             </div>
-            <div className="mt-3 border-t border-slate-200 pt-3">
+            <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3 md:grid-cols-2">
               <Button
                 type="button"
                 className="w-full bg-[#0A66C2] hover:bg-[#084f95]"
@@ -155,6 +199,14 @@ export function ChannelsPage(): JSX.Element {
                 onClick={() => linkedInMutation.mutate()}
               >
                 {linkedInMutation.isPending ? "Connecting LinkedIn..." : "Connect LinkedIn"}
+              </Button>
+              <Button
+                type="button"
+                className="w-full bg-[#1877F2] hover:bg-[#1465cc]"
+                disabled={!activeProjectId || metaMutation.isPending}
+                onClick={() => metaMutation.mutate()}
+              >
+                {metaMutation.isPending ? "Connecting Meta..." : "Connect Facebook / Instagram"}
               </Button>
             </div>
           </Card>
@@ -170,6 +222,45 @@ export function ChannelsPage(): JSX.Element {
               {oauthFeedback.message}
             </div>
           ) : null}
+
+          <Card title="Meta connection status">
+            {metaConnectionsQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Spinner /> Loading Meta connections...
+              </div>
+            ) : metaConnectionsQuery.isError ? (
+              <div className="text-sm text-rose-600">Unable to load Meta connection details.</div>
+            ) : !hasMetaConnections ? (
+              <div className="text-sm text-slate-600">
+                No Facebook pages or Instagram business accounts connected yet.
+              </div>
+            ) : (
+              <div className="space-y-3 text-sm text-slate-700">
+                {(metaConnectionsQuery.data?.facebook_pages ?? []).map((page) => (
+                  <div key={page.id} className="rounded-md border border-slate-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{page.page_name}</span>
+                      <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">Facebook</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">Page ID: {page.page_id}</div>
+                  </div>
+                ))}
+                {(metaConnectionsQuery.data?.instagram_accounts ?? []).map((account) => (
+                  <div key={account.id} className="rounded-md border border-slate-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">
+                        {account.username ? `@${account.username}` : account.instagram_account_id}
+                      </span>
+                      <span className="rounded bg-fuchsia-100 px-2 py-0.5 text-xs text-fuchsia-700">Instagram</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Account ID: {account.instagram_account_id}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
 
           {isEndpointMissing(channelsQuery.error) ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">

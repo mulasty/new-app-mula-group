@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     linkedin_dashboard_redirect_url: str = "http://localhost:3000/app/channels"
     linkedin_oauth_scope: str = "openid profile w_member_social"
 
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_redirect_uri: str = "http://localhost:8000/channels/meta/oauth/callback"
+    meta_dashboard_redirect_url: str = "http://localhost:3000/app/channels"
+    meta_oauth_scope: str = (
+        "pages_manage_posts pages_read_engagement instagram_basic instagram_content_publish"
+    )
+    meta_graph_api_base_url: str = "https://graph.facebook.com/v21.0"
+    public_app_url: str = "http://localhost:3000"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

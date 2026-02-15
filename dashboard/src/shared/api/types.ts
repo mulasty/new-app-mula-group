@@ -72,6 +72,26 @@ export type Channel = {
   updated_at?: string;
 };
 
+export type MetaConnectionPage = {
+  id: string;
+  page_id: string;
+  page_name: string;
+  created_at: string;
+};
+
+export type MetaConnectionInstagramAccount = {
+  id: string;
+  instagram_account_id: string;
+  username?: string | null;
+  linked_page_id?: string | null;
+  created_at: string;
+};
+
+export type MetaConnectionsResponse = {
+  facebook_pages: MetaConnectionPage[];
+  instagram_accounts: MetaConnectionInstagramAccount[];
+};
+
 export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "published_partial" | "failed";
 
 export type PostItem = {

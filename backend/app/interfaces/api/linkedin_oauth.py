@@ -13,6 +13,7 @@ from app.core.security import encrypt_secret
 from app.domain.models.channel import Channel, ChannelType
 from app.domain.models.linkedin_account import LinkedInAccount
 from app.domain.models.project import Project
+from app.integrations.channel_adapters import get_adapter_capabilities
 
 LINKEDIN_OAUTH_AUTHORIZE_URL = "https://www.linkedin.com/oauth/v2/authorization"
 LINKEDIN_OAUTH_ACCESS_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
@@ -154,16 +155,19 @@ def store_linkedin_account_and_channel(
             Channel.type == ChannelType.LINKEDIN.value,
         )
     ).scalar_one_or_none()
+    linkedin_capabilities = get_adapter_capabilities(ChannelType.LINKEDIN.value)
     if channel is None:
         channel = Channel(
             company_id=company_id,
             project_id=project_id,
             type=ChannelType.LINKEDIN.value,
             name=(account_name or f"LinkedIn {linkedin_member_id[:8]}").strip(),
+            capabilities_json=linkedin_capabilities,
         )
         db.add(channel)
     else:
         channel.status = "active"
+        channel.capabilities_json = linkedin_capabilities
         if account_name:
             channel.name = account_name.strip()
         db.add(channel)

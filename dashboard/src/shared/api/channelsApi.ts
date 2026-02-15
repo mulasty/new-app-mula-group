@@ -2,7 +2,13 @@ import { api } from "@/shared/api/client";
 import { isEndpointMissing } from "@/shared/api/errors";
 import { addMockItem, getMockCollection } from "@/shared/api/mockStore";
 import { runtimeConfig } from "@/shared/config/runtime";
-import { ApiListEnvelope, Channel, CreateResult, ListResult } from "@/shared/api/types";
+import {
+  ApiListEnvelope,
+  Channel,
+  CreateResult,
+  ListResult,
+  MetaConnectionsResponse,
+} from "@/shared/api/types";
 
 type CreateChannelPayload = {
   project_id: string;
@@ -82,6 +88,21 @@ export async function getLinkedInOauthStartUrl(projectId?: string): Promise<stri
     },
   });
   return response.data.authorization_url;
+}
+
+export async function getMetaOauthStartUrl(projectId?: string): Promise<string> {
+  const response = await api.get<{ authorization_url: string }>("/channels/meta/oauth/start", {
+    params: {
+      ...(projectId ? { project_id: projectId } : {}),
+      redirect: false,
+    },
+  });
+  return response.data.authorization_url;
+}
+
+export async function listMetaConnections(): Promise<MetaConnectionsResponse> {
+  const response = await api.get<MetaConnectionsResponse>("/channels/meta/connections");
+  return response.data;
 }
 
 export async function updateChannelStatus(

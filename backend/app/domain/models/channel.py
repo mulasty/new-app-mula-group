@@ -2,7 +2,7 @@ import uuid
 from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.db.base import Base
@@ -11,6 +11,8 @@ from app.infrastructure.db.base import Base
 class ChannelType(StrEnum):
     WEBSITE = "website"
     LINKEDIN = "linkedin"
+    FACEBOOK = "facebook"
+    INSTAGRAM = "instagram"
 
 
 class ChannelStatus(StrEnum):
@@ -35,6 +37,7 @@ class Channel(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False, default=ChannelType.WEBSITE.value)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Website")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ChannelStatus.ACTIVE.value)
+    capabilities_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

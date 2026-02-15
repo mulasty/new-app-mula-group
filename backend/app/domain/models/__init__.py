@@ -2,6 +2,9 @@ from app.domain.models.channel import Channel
 from app.domain.models.company import Company
 from app.domain.models.channel_publication import ChannelPublication
 from app.domain.models.channel_retry_policy import ChannelRetryPolicy
+from app.domain.models.facebook_account import FacebookAccount
+from app.domain.models.facebook_page import FacebookPage
+from app.domain.models.instagram_account import InstagramAccount
 from app.domain.models.linkedin_account import LinkedInAccount
 from app.domain.models.post import Post
 from app.domain.models.publish_event import PublishEvent
@@ -19,6 +22,9 @@ __all__ = [
     "Channel",
     "ChannelPublication",
     "ChannelRetryPolicy",
+    "FacebookAccount",
+    "FacebookPage",
+    "InstagramAccount",
     "LinkedInAccount",
     "SocialAccount",
     "Post",
