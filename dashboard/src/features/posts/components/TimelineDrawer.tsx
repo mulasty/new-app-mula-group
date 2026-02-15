@@ -84,26 +84,65 @@ export function TimelineDrawer({
           </div>
         ) : (
           <ul className="space-y-3">
-            {items.map((event) => (
-              <li key={event.id} className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold text-slate-900">{event.event_type}</div>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      event.status === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
-                    }`}
-                  >
-                    {event.status}
-                  </span>
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  attempt #{event.attempt} | {new Date(event.created_at).toLocaleString()}
-                </div>
-                <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
-                  {JSON.stringify(event.metadata_json ?? {}, null, 2)}
-                </pre>
-              </li>
-            ))}
+            {items.map((event) => {
+              const metadata = event.metadata_json ?? {};
+              const publishDurationMs = (() => {
+                if (typeof metadata.publish_latency_ms === "number") {
+                  return metadata.publish_latency_ms;
+                }
+                if (typeof metadata.publish_duration_ms === "number") {
+                  return metadata.publish_duration_ms;
+                }
+                return null;
+              })();
+              const adapterType = typeof metadata.adapter_type === "string" ? metadata.adapter_type : null;
+              const channelType = typeof metadata.channel_type === "string" ? metadata.channel_type : null;
+              const retryable = typeof metadata.retryable === "boolean" ? metadata.retryable : null;
+              const retryCount = typeof metadata.retry_count === "number" ? metadata.retry_count : null;
+              return (
+                <li key={event.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-slate-900">{event.event_type}</div>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        event.status === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+                      }`}
+                    >
+                      {event.status}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    attempt #{event.attempt} | {new Date(event.created_at).toLocaleString()}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    {channelType ? (
+                      <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">channel: {channelType}</span>
+                    ) : null}
+                    {adapterType ? (
+                      <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-700">adapter: {adapterType}</span>
+                    ) : null}
+                    {publishDurationMs !== null ? (
+                      <span className="rounded bg-indigo-50 px-2 py-0.5 text-indigo-700">
+                        latency: {publishDurationMs} ms
+                      </span>
+                    ) : null}
+                    {retryable !== null ? (
+                      <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">
+                        retryable: {retryable ? "yes" : "no"}
+                      </span>
+                    ) : null}
+                    {retryCount !== null ? (
+                      <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
+                        retries: {retryCount}
+                      </span>
+                    ) : null}
+                  </div>
+                  <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
+                    {JSON.stringify(metadata, null, 2)}
+                  </pre>
+                </li>
+              );
+            })}
           </ul>
         )}
       </aside>

@@ -19,7 +19,7 @@ import {
   schedulePost,
   updatePost,
 } from "@/shared/api/postsApi";
-import { listChannels } from "@/shared/api/channelsApi";
+import { listChannels, updateChannelStatus } from "@/shared/api/channelsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
 import { ListResult, PostItem, PostStatus } from "@/shared/api/types";
@@ -54,6 +54,7 @@ export function PostsPage(): JSX.Element {
   const [scheduleTarget, setScheduleTarget] = useState<PostItem | null>(null);
   const [timelineTarget, setTimelineTarget] = useState<PostItem | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: "cancel" | "retry"; post: PostItem } | null>(null);
+  const [updatingChannelId, setUpdatingChannelId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!tenantId) {
@@ -117,6 +118,9 @@ export function PostsPage(): JSX.Element {
     (postId?: string) => {
       queryClient.invalidateQueries({ queryKey: ["posts", tenantId, activeProjectId] });
       queryClient.invalidateQueries({ queryKey: ["websitePublications", tenantId, activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["analyticsSummary", tenantId, activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["analyticsTimeseries", tenantId, activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["analyticsActivity", tenantId, activeProjectId] });
       if (postId) {
         queryClient.invalidateQueries({ queryKey: ["postTimeline", tenantId, postId] });
       }
@@ -141,6 +145,7 @@ export function PostsPage(): JSX.Element {
         source: created.source,
         backendMissing: created.backendMissing,
       }));
+      invalidatePostQueries(created.item.id);
       setCreateModalOpen(false);
       pushToast("Post created", "success");
     },
@@ -161,6 +166,7 @@ export function PostsPage(): JSX.Element {
       ),
     onSuccess: (updated) => {
       optimisticPatchPost(updated.item.id, updated.item);
+      invalidatePostQueries(updated.item.id);
       setEditingPost(null);
       pushToast("Post updated", "success");
     },
@@ -246,6 +252,24 @@ export function PostsPage(): JSX.Element {
     },
   });
 
+  const channelStatusMutation = useMutation({
+    mutationFn: (payload: { channelId: string; status: "active" | "disabled" }) =>
+      updateChannelStatus(payload.channelId, payload.status),
+    onMutate: ({ channelId }) => {
+      setUpdatingChannelId(channelId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
+      pushToast("Publishing channels updated", "success");
+    },
+    onError: (error) => {
+      pushToast(getApiErrorMessage(error, "Failed to update channel status"), "error");
+    },
+    onSettled: () => {
+      setUpdatingChannelId(null);
+    },
+  });
+
   const rows = postsQuery.data?.items ?? [];
   const publishingPostId = useMemo(
     () => rows.find((post) => post.status === "publishing")?.id,
@@ -264,7 +288,11 @@ export function PostsPage(): JSX.Element {
     isEndpointMissing(updateMutation.error);
 
   const channels = channelsQuery.data?.items ?? [];
-  const hasWebsiteChannel = channels.some((channel) => channel.type === "website" && channel.status !== "disabled");
+  const activeChannels = channels.filter((channel) => (channel.status ?? "active") !== "disabled");
+  const hasActiveChannel = activeChannels.length > 0;
+  const hasTextPublishingSupport = activeChannels.some(
+    (channel) => (channel.capabilities_json?.text ?? true) === true
+  );
 
   const visibleRows = useMemo(() => {
     let next = [...rows];
@@ -332,9 +360,9 @@ export function PostsPage(): JSX.Element {
             />
           ) : null}
 
-          {activeProjectId && !hasWebsiteChannel ? (
+          {activeProjectId && !hasActiveChannel ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              No active website channel for this project. Connect one to publish posts.
+              No active channel for this project. Connect a channel before publishing posts.
               <button
                 type="button"
                 className="ml-2 underline"
@@ -342,6 +370,47 @@ export function PostsPage(): JSX.Element {
               >
                 Go to channels
               </button>
+            </div>
+          ) : null}
+
+          {activeProjectId && channels.length > 0 ? (
+            <Card title="Publishing targets">
+              <div className="grid gap-2 md:grid-cols-2">
+                {channels.map((channel) => {
+                  const isActive = (channel.status ?? "active") !== "disabled";
+                  return (
+                    <label
+                      key={channel.id}
+                      className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2"
+                    >
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">{channel.name ?? channel.type}</div>
+                        <div className="text-xs text-slate-500">{channel.type}</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isActive}
+                        disabled={channelStatusMutation.isPending && updatingChannelId === channel.id}
+                        onChange={(event) =>
+                          channelStatusMutation.mutate({
+                            channelId: channel.id,
+                            status: event.target.checked ? "active" : "disabled",
+                          })
+                        }
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Only active channels receive publish jobs for this project.
+              </p>
+            </Card>
+          ) : null}
+
+          {activeProjectId && hasActiveChannel && !hasTextPublishingSupport ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              Active channels do not support text publishing. Connect a channel with Text capability.
             </div>
           ) : null}
 
@@ -379,7 +448,9 @@ export function PostsPage(): JSX.Element {
               {activeProjectId ? (
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {(["all", "draft", "scheduled", "publishing", "published", "failed"] as StatusFilter[]).map(
+                    {(
+                      ["all", "draft", "scheduled", "publishing", "published", "published_partial", "failed"] as StatusFilter[]
+                    ).map(
                       (value) => (
                         <Button
                           key={value}
@@ -415,7 +486,11 @@ export function PostsPage(): JSX.Element {
                       <option value="desc">Newest first</option>
                       <option value="asc">Oldest first</option>
                     </select>
-                    <Button type="button" onClick={() => setCreateModalOpen(true)}>
+                    <Button
+                      type="button"
+                      disabled={!hasTextPublishingSupport}
+                      onClick={() => setCreateModalOpen(true)}
+                    >
                       Create post
                     </Button>
                   </div>
@@ -449,8 +524,10 @@ export function PostsPage(): JSX.Element {
                       {visibleRows.map((row) => {
                         const isPublishing = row.status === "publishing";
                         const canEdit = row.status === "draft";
-                        const canSchedule = row.status === "draft" || row.status === "scheduled";
-                        const canPublishNow = row.status === "draft" || row.status === "scheduled";
+                        const canSchedule =
+                          hasTextPublishingSupport && (row.status === "draft" || row.status === "scheduled");
+                        const canPublishNow =
+                          hasTextPublishingSupport && (row.status === "draft" || row.status === "scheduled");
                         return (
                           <tr key={row.id} className="border-t border-slate-200 align-top">
                             <td className="py-2">
@@ -506,7 +583,7 @@ export function PostsPage(): JSX.Element {
                                     Cancel schedule
                                   </Button>
                                 ) : null}
-                                {row.status === "failed" ? (
+                                {row.status === "failed" || row.status === "published_partial" ? (
                                   <Button
                                     type="button"
                                     className="bg-amber-600 px-3 py-1 text-xs hover:bg-amber-500"

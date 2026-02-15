@@ -1,20 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useOnboardingStatus } from "@/features/onboarding/hooks/useOnboardingStatus";
-import { listChannels } from "@/shared/api/channelsApi";
-import { isEndpointMissing } from "@/shared/api/errors";
-import { getTimeline, listPosts } from "@/shared/api/postsApi";
+import { ActivityStream } from "@/features/dashboard/components/ActivityStream";
+import { AnalyticsKpiCards } from "@/features/dashboard/components/AnalyticsKpiCards";
+import { PublishingChart } from "@/features/dashboard/components/PublishingChart";
+import {
+  getActivityStream,
+  getPublishingSummary,
+  getPublishingTimeseries,
+} from "@/shared/api/analyticsApi";
+import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
+import { PublishingTimeRange } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
-import { Spinner } from "@/shared/components/ui/Spinner";
 import { getActiveProjectId } from "@/shared/utils/storage";
+
+type DashboardTab = "overview" | "publishing" | "activity";
+
+function buildAnalyticsErrorMessage(error: unknown, fallback: string): string | null {
+  if (!error) {
+    return null;
+  }
+  if (isEndpointMissing(error)) {
+    return "Endpoint not available yet.";
+  }
+  return getApiErrorMessage(error, fallback);
+}
 
 export function DashboardPage(): JSX.Element {
   const navigate = useNavigate();
@@ -29,6 +47,8 @@ export function DashboardPage(): JSX.Element {
   } = useOnboardingStatus();
 
   const [activeProjectId, setActiveProject] = useState("");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [range, setRange] = useState<PublishingTimeRange>("7d");
 
   useEffect(() => {
     if (!tenantId) {
@@ -44,44 +64,26 @@ export function DashboardPage(): JSX.Element {
     enabled: Boolean(tenantId),
   });
 
-  const postsQuery = useQuery({
-    queryKey: ["posts", tenantId, activeProjectId],
-    queryFn: () => listPosts(tenantId, activeProjectId),
+  const summaryQuery = useQuery({
+    queryKey: ["analyticsSummary", tenantId, activeProjectId],
+    queryFn: () => getPublishingSummary({ projectId: activeProjectId }),
     enabled: Boolean(tenantId && activeProjectId),
+    refetchInterval: 60000,
   });
 
-  const channelsQuery = useQuery({
-    queryKey: ["channels", tenantId, activeProjectId],
-    queryFn: () => listChannels(tenantId, activeProjectId),
+  const timeseriesQuery = useQuery({
+    queryKey: ["analyticsTimeseries", tenantId, activeProjectId, range],
+    queryFn: () => getPublishingTimeseries({ projectId: activeProjectId, range }),
     enabled: Boolean(tenantId && activeProjectId),
+    refetchInterval: 60000,
   });
 
-  const posts = postsQuery.data?.items ?? [];
-  const metrics = useMemo(
-    () => ({
-      scheduled: posts.filter((post) => post.status === "scheduled").length,
-      published: posts.filter((post) => post.status === "published").length,
-      failed: posts.filter((post) => post.status === "failed").length,
-    }),
-    [posts]
-  );
-
-  const recentPostIds = useMemo(() => posts.slice(0, 5).map((post) => post.id), [posts]);
-  const timelineQueries = useQueries({
-    queries: recentPostIds.map((postId) => ({
-      queryKey: ["postTimeline", tenantId, postId],
-      queryFn: () => getTimeline(postId, tenantId),
-      enabled: Boolean(tenantId && activeProjectId),
-    })),
+  const activityQuery = useQuery({
+    queryKey: ["analyticsActivity", tenantId, activeProjectId, 50],
+    queryFn: () => getActivityStream({ projectId: activeProjectId, limit: 50 }),
+    enabled: Boolean(tenantId && activeProjectId),
+    refetchInterval: 60000,
   });
-
-  const recentEvents = useMemo(() => {
-    const aggregated = timelineQueries
-      .map((query) => query.data?.items ?? [])
-      .flat()
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    return aggregated.slice(0, 8);
-  }, [timelineQueries]);
 
   const projectActions = (
     <ProjectSwitcher
@@ -91,6 +93,19 @@ export function DashboardPage(): JSX.Element {
       onChange={setActiveProject}
       disabled={projectsQuery.isLoading}
     />
+  );
+
+  const summaryError = useMemo(
+    () => buildAnalyticsErrorMessage(summaryQuery.error, "Failed to load publishing summary"),
+    [summaryQuery.error]
+  );
+  const timeseriesError = useMemo(
+    () => buildAnalyticsErrorMessage(timeseriesQuery.error, "Failed to load publishing chart"),
+    [timeseriesQuery.error]
+  );
+  const activityError = useMemo(
+    () => buildAnalyticsErrorMessage(activityQuery.error, "Failed to load activity stream"),
+    [activityQuery.error]
   );
 
   return (
@@ -115,107 +130,119 @@ export function DashboardPage(): JSX.Element {
             </Button>
           </div>
         </Card>
+      ) : !activeProjectId ? (
+        <EmptyState
+          title="Select project to load analytics"
+          description="Choose an active project to view publishing performance."
+          actionLabel="Go to projects"
+          onAction={() => navigate("/app/projects")}
+        />
       ) : (
         <>
-          {!activeProjectId ? (
-            <EmptyState
-              title="Select project to load KPIs"
-              description="Choose an active project to view publishing metrics."
-              actionLabel="Go to projects"
-              onAction={() => navigate("/app/projects")}
-            />
-          ) : null}
-
-          {(postsQuery.isLoading || channelsQuery.isLoading) && activeProjectId ? (
-            <Card>
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <Spinner /> Loading project metrics...
-              </div>
-            </Card>
-          ) : null}
-
-          {isEndpointMissing(postsQuery.error) ? (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Endpoint not available yet. Post metrics may be incomplete.
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <div className="text-sm text-slate-500">Scheduled</div>
-              <div className="mt-1 text-3xl font-bold text-slate-900">{metrics.scheduled}</div>
-            </Card>
-            <Card>
-              <div className="text-sm text-slate-500">Published</div>
-              <div className="mt-1 text-3xl font-bold text-slate-900">{metrics.published}</div>
-            </Card>
-            <Card>
-              <div className="text-sm text-slate-500">Failed</div>
-              <div className="mt-1 text-3xl font-bold text-slate-900">{metrics.failed}</div>
-            </Card>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              className={activeTab === "overview" ? "" : "bg-slate-600 hover:bg-slate-500"}
+              onClick={() => setActiveTab("overview")}
+            >
+              Overview
+            </Button>
+            <Button
+              type="button"
+              className={activeTab === "publishing" ? "" : "bg-slate-600 hover:bg-slate-500"}
+              onClick={() => setActiveTab("publishing")}
+            >
+              Publishing
+            </Button>
+            <Button
+              type="button"
+              className={activeTab === "activity" ? "" : "bg-slate-600 hover:bg-slate-500"}
+              onClick={() => setActiveTab("activity")}
+            >
+              Activity
+            </Button>
           </div>
 
-          <Card title="Recent activity">
-            {recentEvents.length === 0 ? (
-              <div className="text-sm text-slate-600">
-                Recent publish activity will appear here after posts move through schedule/publish lifecycle.
-              </div>
-            ) : (
-              <ul className="space-y-2 text-sm text-slate-600">
-                {recentEvents.map((event) => (
-                  <li key={event.id} className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="font-medium text-slate-900">{event.event_type}</div>
-                    <div className="text-xs text-slate-500">
-                      {event.status} | attempt #{event.attempt} | {new Date(event.created_at).toLocaleString()}
+          {activeTab === "overview" ? (
+            <>
+              <AnalyticsKpiCards
+                data={summaryQuery.data}
+                isLoading={summaryQuery.isLoading}
+                errorMessage={summaryError}
+              />
+              <div className="grid gap-4 lg:grid-cols-3">
+                <Card title="Projects">
+                  {(onboardingProjectsQuery.data?.items.length ?? 0) === 0 ? (
+                    <EmptyState
+                      title="No projects"
+                      description="Create a project to organize your publishing workflows."
+                      actionLabel="Add project"
+                      onAction={() => navigate("/app/projects")}
+                    />
+                  ) : (
+                    <div className="text-sm text-slate-600">
+                      {onboardingProjectsQuery.data?.items.length} projects available.
                     </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+                  )}
+                </Card>
+                <Card title="Channels">
+                  {(onboardingChannelsQuery.data?.items.length ?? 0) === 0 ? (
+                    <EmptyState
+                      title="No channels"
+                      description="Connect at least one channel before scheduling posts."
+                      actionLabel="Connect channel"
+                      onAction={() => navigate("/app/channels")}
+                    />
+                  ) : (
+                    <div className="text-sm text-slate-600">
+                      {onboardingChannelsQuery.data?.items.length} channels connected.
+                    </div>
+                  )}
+                </Card>
+                <Card title="Posts">
+                  {(onboardingPostsQuery.data?.items.length ?? 0) === 0 ? (
+                    <EmptyState
+                      title="No posts"
+                      description="Create first post and start testing your publishing pipeline."
+                      actionLabel="Create post"
+                      onAction={() => navigate("/app/posts")}
+                    />
+                  ) : (
+                    <div className="text-sm text-slate-600">
+                      {onboardingPostsQuery.data?.items.length} posts in workspace.
+                    </div>
+                  )}
+                </Card>
+              </div>
+            </>
+          ) : null}
+
+          {activeTab === "publishing" ? (
+            <>
+              <AnalyticsKpiCards
+                data={summaryQuery.data}
+                isLoading={summaryQuery.isLoading}
+                errorMessage={summaryError}
+              />
+              <PublishingChart
+                points={timeseriesQuery.data ?? []}
+                range={range}
+                onRangeChange={setRange}
+                isLoading={timeseriesQuery.isLoading}
+                errorMessage={timeseriesError}
+              />
+            </>
+          ) : null}
+
+          {activeTab === "activity" ? (
+            <ActivityStream
+              items={activityQuery.data ?? []}
+              isLoading={activityQuery.isLoading}
+              errorMessage={activityError}
+            />
+          ) : null}
         </>
       )}
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Projects">
-          {(onboardingProjectsQuery.data?.items.length ?? 0) === 0 ? (
-            <EmptyState
-              title="No projects"
-              description="Create a project to organize your publishing workflows."
-              actionLabel="Add project"
-              onAction={() => navigate("/app/projects")}
-            />
-          ) : (
-            <div className="text-sm text-slate-600">{onboardingProjectsQuery.data?.items.length} projects available.</div>
-          )}
-        </Card>
-
-        <Card title="Channels">
-          {(onboardingChannelsQuery.data?.items.length ?? 0) === 0 ? (
-            <EmptyState
-              title="No channels"
-              description="Connect at least one channel before scheduling posts."
-              actionLabel="Connect channel"
-              onAction={() => navigate("/app/channels")}
-            />
-          ) : (
-            <div className="text-sm text-slate-600">{onboardingChannelsQuery.data?.items.length} channels connected.</div>
-          )}
-        </Card>
-
-        <Card title="Posts">
-          {(onboardingPostsQuery.data?.items.length ?? 0) === 0 ? (
-            <EmptyState
-              title="No posts"
-              description="Create first post and start testing your publishing pipeline."
-              actionLabel="Create post"
-              onAction={() => navigate("/app/posts")}
-            />
-          ) : (
-            <div className="text-sm text-slate-600">{onboardingPostsQuery.data?.items.length} posts in workspace.</div>
-          )}
-        </Card>
-      </div>
     </div>
   );
 }

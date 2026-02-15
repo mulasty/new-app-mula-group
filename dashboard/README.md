@@ -41,6 +41,83 @@ During current test phase, login autofill is enabled in dev localhost mode for f
   - recent publish activity based on timeline events
 - Channels page is project-scoped for website channel connection.
 
+## Analytics (Phase-4.2)
+
+- Dashboard tabs: `Overview | Publishing | Activity`
+- Analytics data sources:
+  - `/analytics/publishing-summary`
+  - `/analytics/publishing-timeseries` (7d/30d/90d)
+  - `/analytics/activity-stream`
+- Queries refresh every 60 seconds and are invalidated after post mutations.
+- Components:
+  - `AnalyticsKpiCards`
+  - `PublishingChart`
+  - `ActivityStream`
+
+## LinkedIn connector (Phase-5.1)
+
+- Channels page includes `Connect LinkedIn` OAuth flow.
+- UI states:
+  - `Connecting LinkedIn...`
+  - success (`Connected`)
+  - error banner with callback reason.
+- LinkedIn channels render with `in` badge and connected status.
+
+## Meta connector (Phase-5.3)
+
+- Channels page includes `Connect Facebook / Instagram` OAuth action.
+- Meta callback feedback:
+  - `connected=meta` success notification
+  - `connected=meta_error` with clear reason banner
+- Connected entities panel:
+  - Facebook pages list
+  - Instagram business accounts list
+- Publishing target control:
+  - channel toggles (`active` / `disabled`) from Posts page
+  - only active channels receive publish jobs
+- Timeline view surfaces:
+  - publish latency (`publish_latency_ms`)
+  - adapter type
+  - retry attempts and retryable flag
+
+## Universal connector UX (Phase-5.4)
+
+- Dynamic `Connect Platform` modal reads from `GET /connectors/available`.
+- Connector list supports available + unavailable platforms (`coming soon` style).
+- Capability badges can render:
+  - `Text`
+  - `Image`
+  - `Video`
+  - `Reels`
+  - `Shorts`
+
+## Multi-platform connector UI (Phase-5.5)
+
+- Channels page now supports OAuth connect flows for:
+  - TikTok
+  - Threads
+  - X
+  - Pinterest
+- Callback query handling supports:
+  - `?connected=<platform>`
+  - `?connected=<platform>_error&reason=...`
+- Channel cards include:
+  - platform icon badge
+  - connection status (`Connected`, `Needs reconnect`, `Disabled`)
+  - capability badges from `capabilities_json`
+
+## Connector Framework (Phase-5.2)
+
+- Channels page renders capability badges from backend:
+  - `Text`
+  - `Image`
+  - `Video`
+- Posts console blocks text publishing actions when selected project has no text-capable channel.
+- Timeline drawer highlights per-channel publish telemetry:
+  - adapter type
+  - latency (`publish_duration_ms`)
+  - retryability + attempt number
+
 ## API fallback behavior
 
 Dashboard attempts backend endpoints first and uses local mock fallback when missing:
