@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     pinterest_redirect_uri: str = "http://localhost:8000/channels/pinterest/oauth/callback"
     pinterest_oauth_scope: str = "pins:read,pins:write,boards:read,user_accounts:read"
 
+    ai_provider: str = "openai"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_timeout_seconds: float = 30.0
+    openai_temperature: float = 0.2
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

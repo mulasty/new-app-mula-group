@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,6 +11,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.services.publishing_service import emit_publish_event, publish_post_async
+from app.application.services.ai_provider import (
+    AIContentRequest,
+    AIProviderError,
+    DEFAULT_POST_TEXT_OUTPUT_SCHEMA,
+    get_ai_provider,
+)
 from app.domain.models.automation_event import AutomationEvent
 from app.domain.models.automation_rule import (
     AutomationActionType,
@@ -17,7 +24,9 @@ from app.domain.models.automation_rule import (
     AutomationTriggerType,
 )
 from app.domain.models.automation_run import AutomationRun, AutomationRunStatus
+from app.domain.models.campaign import Campaign
 from app.domain.models.content_item import ContentItem, ContentItemSource, ContentItemStatus
+from app.domain.models.content_template import ContentTemplate, ContentTemplateType
 from app.domain.models.post import Post, PostStatus
 from app.domain.models.publish_event import PublishEvent
 
@@ -335,11 +344,109 @@ def _check_guardrails(db: Session, *, rule: AutomationRule, now: datetime, title
 
 def _action_generate_post(db: Session, run: AutomationRun, rule: AutomationRule) -> dict[str, Any]:
     action_config = rule.action_config_json or {}
-    title = action_config.get("title") or f"Automation draft {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
-    body = action_config.get("body") or "Automated content draft."
+    campaign = None
+    if rule.campaign_id:
+        campaign = db.execute(
+            select(Campaign).where(
+                Campaign.id == rule.campaign_id,
+                Campaign.company_id == run.company_id,
+                Campaign.project_id == run.project_id,
+            )
+        ).scalar_one_or_none()
+
+    template = None
+    template_id_raw = action_config.get("template_id")
+    if template_id_raw:
+        try:
+            template_id = UUID(str(template_id_raw))
+            template = db.execute(
+                select(ContentTemplate).where(
+                    ContentTemplate.id == template_id,
+                    ContentTemplate.company_id == run.company_id,
+                    ContentTemplate.project_id == run.project_id,
+                )
+            ).scalar_one_or_none()
+        except ValueError:
+            template = None
+
+    if template and template.template_type != ContentTemplateType.POST_TEXT.value:
+        raise ValueError("unsupported_template_type_for_generate_post")
+
+    prompt_template = (
+        template.prompt_template
+        if template is not None
+        else (
+            action_config.get("prompt_template")
+            or "Napisz angażujący post o {{topic}} dla {{brand.voice}} z CTA {{offer}}."
+        )
+    )
+    output_schema = (
+        template.output_schema_json
+        if template is not None and template.output_schema_json
+        else DEFAULT_POST_TEXT_OUTPUT_SCHEMA
+    )
+    variables = {
+        **(template.default_values_json if template is not None else {}),
+        **(action_config.get("variables") or {}),
+    }
+    brand_profile = (campaign.brand_profile_json if campaign is not None else {}) or {}
+    language = (
+        action_config.get("language")
+        or (campaign.language if campaign is not None else None)
+        or "pl"
+    )
+
+    ai_provider = get_ai_provider()
+    try:
+        generated = asyncio.run(
+            ai_provider.generate_post_text(
+                AIContentRequest(
+                    template=str(prompt_template),
+                    output_schema=output_schema,
+                    variables=variables,
+                    brand_profile=brand_profile,
+                    language=str(language),
+                )
+            )
+        )
+    except AIProviderError as exc:
+        failed_item = ContentItem(
+            company_id=run.company_id,
+            project_id=run.project_id,
+            campaign_id=rule.campaign_id,
+            template_id=(template.id if template is not None else None),
+            status=ContentItemStatus.FAILED.value,
+            title="AI generation failed",
+            body="",
+            metadata_json={
+                "generated_by_rule_id": str(rule.id),
+                "error": str(exc),
+                "variables": variables,
+            },
+            source=ContentItemSource.AI.value,
+        )
+        db.add(failed_item)
+        db.flush()
+        emit_automation_event(
+            db,
+            company_id=run.company_id,
+            project_id=run.project_id,
+            run_id=run.id,
+            event_type="ContentGenerationFailed",
+            status="error",
+            metadata_json={"content_item_id": str(failed_item.id), "error": str(exc)},
+        )
+        raise ValueError("ai_generation_failed") from exc
+
+    generated_title = str(generated.get("title") or "").strip()
+    generated_body = str(generated.get("body") or "").strip()
+    risk_flags = generated.get("risk_flags") or []
     requires_approval = bool((rule.guardrails_json or {}).get("approval_required", False))
+    if isinstance(risk_flags, list) and any(str(flag).lower() != "none" for flag in risk_flags):
+        requires_approval = True
+
     status = ContentItemStatus.NEEDS_REVIEW.value if requires_approval else ContentItemStatus.DRAFT.value
-    violations = _check_guardrails(db, rule=rule, now=datetime.now(UTC), title=str(title))
+    violations = _check_guardrails(db, rule=rule, now=datetime.now(UTC), title=generated_title)
     if violations:
         status = ContentItemStatus.NEEDS_REVIEW.value
 
@@ -347,13 +454,18 @@ def _action_generate_post(db: Session, run: AutomationRun, rule: AutomationRule)
         company_id=run.company_id,
         project_id=run.project_id,
         campaign_id=rule.campaign_id,
+        template_id=(template.id if template is not None else None),
         status=status,
-        title=str(title),
-        body=str(body),
+        title=generated_title,
+        body=generated_body,
         metadata_json={
             "generated_by_rule_id": str(rule.id),
             "guardrail_violations": violations,
-            "channels": action_config.get("channels", []),
+            "channels": generated.get("channels", []),
+            "hashtags": generated.get("hashtags", []),
+            "cta": generated.get("cta"),
+            "risk_flags": risk_flags,
+            "ai_output": generated,
         },
         source=ContentItemSource.AI.value,
     )
