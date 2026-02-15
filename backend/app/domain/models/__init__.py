@@ -6,6 +6,7 @@ from app.domain.models.facebook_account import FacebookAccount
 from app.domain.models.facebook_page import FacebookPage
 from app.domain.models.instagram_account import InstagramAccount
 from app.domain.models.linkedin_account import LinkedInAccount
+from app.domain.models.platform_rate_limit import PlatformRateLimit
 from app.domain.models.post import Post
 from app.domain.models.publish_event import PublishEvent
 from app.domain.models.project import Project
@@ -26,6 +27,7 @@ __all__ = [
     "FacebookPage",
     "InstagramAccount",
     "LinkedInAccount",
+    "PlatformRateLimit",
     "SocialAccount",
     "Post",
     "PublishEvent",

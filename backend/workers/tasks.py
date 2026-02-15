@@ -20,6 +20,8 @@ from app.integrations.channel_adapters import (
     AdapterRetryableError,
     get_channel_adapter,
 )
+from app.integrations.platform_rate_limit_service import check_platform_rate_limit
+from app.infrastructure.cache.redis_client import get_redis_client
 from app.infrastructure.db.session import SessionLocal
 from workers.celery_app import celery_app
 
@@ -165,6 +167,33 @@ async def _publish_channel(
                     publish_duration_ms=duration_ms,
                     metadata={"reason": "retry_policy_exhausted", "max_attempts": policy.max_attempts},
                     error=f"Retry policy exhausted for channel type '{channel.type}'",
+                )
+
+            rate_limit_result = check_platform_rate_limit(
+                db=db,
+                redis_client=get_redis_client(),
+                platform=channel.type,
+            )
+            if not rate_limit_result.allowed:
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                return ChannelPublishResult(
+                    channel_id=channel.id,
+                    channel_type=channel.type,
+                    adapter_type="rate_limit_guard",
+                    success=False,
+                    retryable=True,
+                    publish_duration_ms=duration_ms,
+                    metadata={
+                        "error_code": "platform_rate_limited",
+                        "platform": rate_limit_result.platform,
+                        "rate_limit": rate_limit_result.limit,
+                        "rate_limit_current": rate_limit_result.current,
+                        "retry_after_seconds": rate_limit_result.retry_after_seconds,
+                    },
+                    error=(
+                        "Platform rate limit exceeded for "
+                        f"{rate_limit_result.platform}. Retry after {rate_limit_result.retry_after_seconds}s"
+                    ),
                 )
 
             adapter = get_channel_adapter(channel.type, db, strict=False)
