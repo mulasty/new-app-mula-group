@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.interfaces.api.analytics import router as analytics_router
 from app.interfaces.api.auth import router as auth_router
 from app.interfaces.api.channels import router as channels_router
 from app.interfaces.api.connectors import router as connectors_router
@@ -19,4 +20,5 @@ api_router.include_router(projects_router)
 api_router.include_router(channels_router)
 api_router.include_router(connectors_router)
 api_router.include_router(posts_router)
+api_router.include_router(analytics_router)
 api_router.include_router(website_publications_router)
