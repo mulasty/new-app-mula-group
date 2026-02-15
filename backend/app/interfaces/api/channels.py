@@ -32,6 +32,15 @@ from app.interfaces.api.meta_oauth import (
     resolve_project_for_meta,
     store_meta_connections_and_channels,
 )
+from app.interfaces.api.social_oauth_utils import build_dashboard_redirect
+from app.interfaces.api.tiktok_oauth import (
+    build_tiktok_oauth_authorization_url,
+    decode_tiktok_state,
+    exchange_tiktok_code_for_tokens,
+    fetch_tiktok_creator_info,
+    fetch_tiktok_userinfo,
+    store_tiktok_account_and_channel,
+)
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(prefix="/channels", tags=["channels"])
@@ -307,3 +316,97 @@ def meta_connections(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     return list_meta_connections(db, company_id=tenant_id)
+
+
+@router.get("/tiktok/oauth/start", status_code=status.HTTP_200_OK)
+def tiktok_oauth_start(
+    project_id: UUID | None = Query(default=None),
+    redirect: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+):
+    project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
+    authorization_url = build_tiktok_oauth_authorization_url(
+        company_id=tenant_id,
+        project_id=project.id,
+        user_id=current_user.id,
+    )
+    if redirect:
+        return RedirectResponse(url=authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/tiktok/oauth/callback")
+def tiktok_oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if error:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.TIKTOK.value,
+                success=False,
+                reason=error_description or error,
+            ),
+            status_code=302,
+        )
+
+    if not code or not state:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.TIKTOK.value,
+                success=False,
+                reason="Missing OAuth params",
+            ),
+            status_code=302,
+        )
+
+    try:
+        state_payload = decode_tiktok_state(state)
+        company_id = UUID(state_payload["company_id"])
+        project_id = UUID(state_payload["project_id"])
+        code_verifier = str(state_payload["code_verifier"])
+
+        token_payload = exchange_tiktok_code_for_tokens(code=code, code_verifier=code_verifier)
+        access_token = str(token_payload.get("access_token") or "")
+        refresh_token = str(token_payload.get("refresh_token") or "")
+        expires_in = int(token_payload.get("expires_in", 3600))
+        if not access_token:
+            raise HTTPException(status_code=400, detail="TikTok token exchange missing access token")
+
+        userinfo = fetch_tiktok_userinfo(access_token)
+        creator_info = fetch_tiktok_creator_info(access_token)
+        external_account_id = str(userinfo.get("open_id") or "")
+        display_name = userinfo.get("display_name")
+        if not external_account_id:
+            raise HTTPException(status_code=400, detail="TikTok user profile missing open_id")
+
+        store_tiktok_account_and_channel(
+            db,
+            company_id=company_id,
+            project_id=project_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in_seconds=expires_in,
+            external_account_id=external_account_id,
+            display_name=(str(display_name).strip() if display_name else None),
+            creator_info=creator_info,
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.TIKTOK.value,
+                success=False,
+                reason=str(exc),
+            ),
+            status_code=302,
+        )
+
+    return RedirectResponse(
+        url=build_dashboard_redirect(platform=ChannelType.TIKTOK.value, success=True),
+        status_code=302,
+    )

@@ -48,7 +48,7 @@ export type Project = {
   created_at?: string;
 };
 
-export type ChannelType = "website" | "linkedin" | "facebook" | "instagram" | "youtube";
+export type ChannelType = "website" | "linkedin" | "facebook" | "instagram" | "tiktok" | "youtube";
 export type ChannelStatus = "active" | "disabled";
 export type ChannelCapabilities = {
   text?: boolean;

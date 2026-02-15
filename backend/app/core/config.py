@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     meta_graph_api_base_url: str = "https://graph.facebook.com/v21.0"
     public_app_url: str = "http://localhost:3000"
 
+    tiktok_client_key: str | None = None
+    tiktok_client_secret: str | None = None
+    tiktok_redirect_uri: str = "http://localhost:8000/channels/tiktok/oauth/callback"
+    tiktok_oauth_scope: str = "user.info.basic,video.publish"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

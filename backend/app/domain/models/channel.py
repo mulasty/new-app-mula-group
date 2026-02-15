@@ -13,6 +13,7 @@ class ChannelType(StrEnum):
     LINKEDIN = "linkedin"
     FACEBOOK = "facebook"
     INSTAGRAM = "instagram"
+    TIKTOK = "tiktok"
 
 
 class ChannelStatus(StrEnum):
