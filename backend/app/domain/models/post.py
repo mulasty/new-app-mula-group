@@ -14,6 +14,7 @@ class PostStatus(StrEnum):
     SCHEDULED = "scheduled"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
+    PUBLISHED_PARTIAL = "published_partial"
     FAILED = "failed"
 
 
@@ -21,7 +22,7 @@ class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft', 'scheduled', 'publishing', 'published', 'failed')",
+            "status IN ('draft', 'scheduled', 'publishing', 'published', 'published_partial', 'failed')",
             name="ck_posts_status_values",
         ),
     )

@@ -76,6 +76,20 @@ def get_active_website_channel(db: Session, *, company_id: UUID, project_id: UUI
     ).scalar_one_or_none()
 
 
+def get_active_channels(db: Session, *, company_id: UUID, project_id: UUID) -> list[Channel]:
+    return (
+        db.execute(
+            select(Channel).where(
+                Channel.company_id == company_id,
+                Channel.project_id == project_id,
+                Channel.status == ChannelStatus.ACTIVE.value,
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 def get_existing_website_publication(db: Session, *, company_id: UUID, post_id: UUID) -> WebsitePublication | None:
     return db.execute(
         select(WebsitePublication).where(
