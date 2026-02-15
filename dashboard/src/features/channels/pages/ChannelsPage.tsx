@@ -4,22 +4,29 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
-import {
-  createWebsiteChannel,
-  getLinkedInOauthStartUrl,
-  getMetaOauthStartUrl,
-  listChannels,
-  listMetaConnections,
-} from "@/shared/api/channelsApi";
+import { createWebsiteChannel, listChannels, listMetaConnections } from "@/shared/api/channelsApi";
+import { getConnectorOauthStartUrl, listAvailableConnectors } from "@/shared/api/connectorsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
+import { ConnectorAvailability } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
+import { Modal } from "@/shared/components/ui/Modal";
 import { Spinner } from "@/shared/components/ui/Spinner";
 import { getActiveProjectId } from "@/shared/utils/storage";
+
+function capabilityLabels(connector: ConnectorAvailability): string[] {
+  const labels: string[] = [];
+  if (connector.capabilities.text) labels.push("Text");
+  if (connector.capabilities.image) labels.push("Image");
+  if (connector.capabilities.video) labels.push("Video");
+  if (connector.capabilities.reels) labels.push("Reels");
+  if (connector.capabilities.shorts) labels.push("Shorts");
+  return labels;
+}
 
 export function ChannelsPage(): JSX.Element {
   const location = useLocation();
@@ -31,6 +38,7 @@ export function ChannelsPage(): JSX.Element {
   const [activeProjectId, setActiveProject] = useState("");
   const [channelName, setChannelName] = useState("Website");
   const [oauthFeedback, setOauthFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [connectorModalOpen, setConnectorModalOpen] = useState(false);
 
   useEffect(() => {
     if (!tenantId) {
@@ -50,6 +58,12 @@ export function ChannelsPage(): JSX.Element {
     queryKey: ["channels", tenantId, activeProjectId],
     queryFn: () => listChannels(tenantId, activeProjectId),
     enabled: Boolean(tenantId && activeProjectId),
+  });
+
+  const connectorsQuery = useQuery({
+    queryKey: ["connectors", tenantId],
+    queryFn: () => listAvailableConnectors(),
+    enabled: Boolean(tenantId),
   });
 
   const metaConnectionsQuery = useQuery({
@@ -76,23 +90,13 @@ export function ChannelsPage(): JSX.Element {
     },
   });
 
-  const linkedInMutation = useMutation({
-    mutationFn: () => getLinkedInOauthStartUrl(activeProjectId || undefined),
+  const connectorMutation = useMutation({
+    mutationFn: (platform: string) => getConnectorOauthStartUrl(platform, activeProjectId || undefined),
     onSuccess: (authorizationUrl) => {
       window.location.assign(authorizationUrl);
     },
     onError: (error) => {
-      pushToast(getApiErrorMessage(error, "Failed to start LinkedIn OAuth"), "error");
-    },
-  });
-
-  const metaMutation = useMutation({
-    mutationFn: () => getMetaOauthStartUrl(activeProjectId || undefined),
-    onSuccess: (authorizationUrl) => {
-      window.location.assign(authorizationUrl);
-    },
-    onError: (error) => {
-      pushToast(getApiErrorMessage(error, "Failed to start Meta OAuth"), "error");
+      pushToast(getApiErrorMessage(error, "Failed to start connector OAuth"), "error");
     },
   });
 
@@ -100,12 +104,27 @@ export function ChannelsPage(): JSX.Element {
     const params = new URLSearchParams(location.search);
     const linkedInState = params.get("linkedin");
     const metaState = params.get("meta");
+    const connected = params.get("connected");
     const reason = params.get("reason");
-    if (!linkedInState && !metaState) {
+    if (!linkedInState && !metaState && !connected) {
       return;
     }
 
-    if (linkedInState) {
+    let successMessage = "Connector connected successfully.";
+    if (connected) {
+      if (connected.endsWith("_error")) {
+        const platform = connected.replace("_error", "");
+        setOauthFeedback({
+          type: "error",
+          message: reason ? `${platform} connection failed: ${reason}` : `${platform} connection failed.`,
+        });
+        pushToast(`${platform} connection failed`, "error");
+      } else {
+        successMessage = `${connected} connected successfully.`;
+        setOauthFeedback({ type: "success", message: successMessage });
+        pushToast(`${connected} connected`, "success");
+      }
+    } else if (linkedInState) {
       if (linkedInState === "connected") {
         setOauthFeedback({ type: "success", message: "LinkedIn account connected successfully." });
         pushToast("LinkedIn connected", "success");
@@ -131,6 +150,7 @@ export function ChannelsPage(): JSX.Element {
 
     queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
     queryClient.invalidateQueries({ queryKey: ["metaConnections", tenantId] });
+    queryClient.invalidateQueries({ queryKey: ["connectors", tenantId] });
     navigate("/app/channels", { replace: true });
   }, [location.search, navigate, pushToast, queryClient, tenantId, activeProjectId]);
 
@@ -145,7 +165,7 @@ export function ChannelsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Channels"
-        description="Connect website, LinkedIn, Facebook and Instagram channels per project."
+        description="Connect channels per project. Connector catalog is dynamic and capability-aware."
         actions={
           <ProjectSwitcher
             tenantId={tenantId}
@@ -181,7 +201,7 @@ export function ChannelsPage(): JSX.Element {
                 value={channelName}
                 onChange={(event) => setChannelName(event.target.value)}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Channel name"
+                placeholder="Website channel name"
               />
               <Button
                 type="button"
@@ -191,22 +211,14 @@ export function ChannelsPage(): JSX.Element {
                 {createMutation.isPending ? "Connecting..." : "Connect website channel"}
               </Button>
             </div>
-            <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3 md:grid-cols-2">
+            <div className="mt-3 border-t border-slate-200 pt-3">
               <Button
                 type="button"
-                className="w-full bg-[#0A66C2] hover:bg-[#084f95]"
-                disabled={!activeProjectId || linkedInMutation.isPending}
-                onClick={() => linkedInMutation.mutate()}
+                className="w-full bg-slate-800 hover:bg-slate-700"
+                disabled={!activeProjectId}
+                onClick={() => setConnectorModalOpen(true)}
               >
-                {linkedInMutation.isPending ? "Connecting LinkedIn..." : "Connect LinkedIn"}
-              </Button>
-              <Button
-                type="button"
-                className="w-full bg-[#1877F2] hover:bg-[#1465cc]"
-                disabled={!activeProjectId || metaMutation.isPending}
-                onClick={() => metaMutation.mutate()}
-              >
-                {metaMutation.isPending ? "Connecting Meta..." : "Connect Facebook / Instagram"}
+                Open connector catalog
               </Button>
             </div>
           </Card>
@@ -300,13 +312,93 @@ export function ChannelsPage(): JSX.Element {
                       ) : null}
                     </div>
                     <div className="mt-2 text-xs text-slate-500">
-                      Status: <span className="font-medium capitalize text-slate-700">{channel.status ?? "active"}</span>
+                      Status:{" "}
+                      <span className="font-medium capitalize text-slate-700">{channel.status ?? "active"}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {channel.capabilities_json?.text ? (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Text</span>
+                      ) : null}
+                      {channel.capabilities_json?.image ? (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Image</span>
+                      ) : null}
+                      {channel.capabilities_json?.video ? (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Video</span>
+                      ) : null}
+                      {channel.capabilities_json?.reels ? (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Reels</span>
+                      ) : null}
+                      {channel.capabilities_json?.shorts ? (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Shorts</span>
+                      ) : null}
                     </div>
                   </li>
                 ))}
               </ul>
             )}
           </Card>
+
+          <Modal
+            open={connectorModalOpen}
+            title="Connect platform"
+            onClose={() => setConnectorModalOpen(false)}
+          >
+            {connectorsQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Spinner /> Loading connectors...
+              </div>
+            ) : connectorsQuery.isError ? (
+              <div className="text-sm text-rose-600">Unable to load connector catalog.</div>
+            ) : (
+              <div className="space-y-2">
+                {(connectorsQuery.data ?? []).map((connector) => {
+                  const labels = capabilityLabels(connector);
+                  const isWebsite = connector.platform === "website";
+                  const canConnect = connector.available && !isWebsite;
+                  return (
+                    <div
+                      key={connector.platform}
+                      className="rounded-md border border-slate-200 p-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium text-slate-900">{connector.display_name}</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {labels.length > 0 ? (
+                              labels.map((label) => (
+                                <span
+                                  key={`${connector.platform}-${label}`}
+                                  className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700"
+                                >
+                                  {label}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-xs text-slate-500">No declared capabilities</span>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          className="px-3 py-1 text-xs"
+                          disabled={!canConnect || connectorMutation.isPending}
+                          onClick={() => {
+                            if (isWebsite) {
+                              pushToast("Website connector is configured via the form above.", "success");
+                              return;
+                            }
+                            connectorMutation.mutate(connector.platform);
+                          }}
+                        >
+                          {isWebsite ? "Manual" : connector.available ? "Connect" : "Unavailable"}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Modal>
         </>
       )}
     </div>

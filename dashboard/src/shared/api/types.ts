@@ -157,3 +157,11 @@ export type ActivityStreamItem = {
   status: "ok" | "error";
   metadata: Record<string, unknown>;
 };
+
+export type ConnectorAvailability = {
+  platform: string;
+  display_name: string;
+  capabilities: ChannelCapabilities;
+  oauth_start_path?: string;
+  available: boolean;
+};
