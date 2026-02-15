@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     tiktok_redirect_uri: str = "http://localhost:8000/channels/tiktok/oauth/callback"
     tiktok_oauth_scope: str = "user.info.basic,video.publish"
 
+    threads_app_id: str | None = None
+    threads_app_secret: str | None = None
+    threads_redirect_uri: str = "http://localhost:8000/channels/threads/oauth/callback"
+    threads_oauth_scope: str = "threads_basic,threads_content_publish"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
