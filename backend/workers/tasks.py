@@ -9,6 +9,13 @@ from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import select
 
 from app.application.services.publishing_service import emit_publish_event, get_active_channels, publish_post_async
+from app.application.services.automation_service import (
+    dispatch_due_time_rules,
+    dispatch_event_triggered_rules,
+    emit_automation_event,
+    execute_automation_run_runtime,
+)
+from app.domain.models.automation_run import AutomationRun, AutomationRunStatus
 from app.domain.models.channel import Channel
 from app.domain.models.channel_publication import ChannelPublication
 from app.domain.models.channel_retry_policy import ChannelRetryPolicy, RetryBackoffStrategy
@@ -32,6 +39,7 @@ DEFAULT_BACKOFF_STRATEGY = RetryBackoffStrategy.EXPONENTIAL.value
 DEFAULT_RETRY_DELAY_SECONDS = 30
 MAX_TASK_RETRIES = 100
 MAX_CONCURRENT_CHANNEL_PUBLISHES = 5
+AUTOMATION_MAX_RETRIES = 5
 
 
 @dataclass(frozen=True)
@@ -378,6 +386,134 @@ def schedule_due_posts() -> dict:
 
     logger.info("scheduler_run completed enqueued=%s due_checked_at=%s", enqueued, now.isoformat())
     return {"enqueued": enqueued}
+
+
+@celery_app.task(name="workers.tasks.schedule_due_automation_rules")
+def schedule_due_automation_rules() -> dict:
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        result = dispatch_due_time_rules(db, now=now)
+        db.commit()
+
+    logger.info(
+        "automation_scheduler_completed checked=%s runs_created=%s checked_at=%s",
+        result.rules_checked,
+        result.runs_created,
+        now.isoformat(),
+    )
+    return {
+        "rules_checked": result.rules_checked,
+        "runs_created": result.runs_created,
+    }
+
+
+@celery_app.task(name="workers.tasks.process_publish_event_rules")
+def process_publish_event_rules() -> dict:
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        result = dispatch_event_triggered_rules(db, redis_client=get_redis_client())
+        db.commit()
+
+    logger.info(
+        "automation_event_scheduler_completed checked=%s runs_created=%s checked_at=%s",
+        result.rules_checked,
+        result.runs_created,
+        now.isoformat(),
+    )
+    return {
+        "rules_checked": result.rules_checked,
+        "runs_created": result.runs_created,
+    }
+
+
+@celery_app.task(
+    bind=True,
+    name="workers.tasks.execute_automation_run",
+    max_retries=AUTOMATION_MAX_RETRIES,
+    acks_late=True,
+)
+def execute_automation_run(self, run_id: str) -> dict:
+    run_uuid = UUID(run_id)
+    attempt = self.request.retries + 1
+    with SessionLocal() as db:
+        run = db.execute(select(AutomationRun).where(AutomationRun.id == run_uuid)).scalar_one_or_none()
+        if run is None:
+            logger.warning("automation_run_missing run_id=%s", run_id)
+            return {"status": "missing"}
+        if run.status in [AutomationRunStatus.SUCCESS.value, AutomationRunStatus.FAILED.value]:
+            return {"status": run.status, "reason": "already_terminal"}
+
+        try:
+            payload = execute_automation_run_runtime(db, run_id=run_uuid)
+            db.commit()
+            logger.info(
+                "automation_run_completed run_id=%s status=%s attempt=%s",
+                run_id,
+                payload.get("status"),
+                attempt,
+            )
+            return payload
+        except ValueError as exc:
+            db.rollback()
+            run = db.execute(select(AutomationRun).where(AutomationRun.id == run_uuid)).scalar_one_or_none()
+            if run is not None:
+                run.status = AutomationRunStatus.FAILED.value
+                run.finished_at = datetime.now(UTC)
+                run.error_message = str(exc)
+                emit_automation_event(
+                    db,
+                    company_id=run.company_id,
+                    project_id=run.project_id,
+                    run_id=run.id,
+                    event_type="AutomationRunFailed",
+                    status="error",
+                    metadata_json={"error": str(exc), "attempt": attempt},
+                )
+                db.commit()
+            logger.exception("automation_run_failed_non_retryable run_id=%s", run_id)
+            return {"status": "failed", "error": str(exc)}
+        except Exception as exc:
+            db.rollback()
+            run = db.execute(select(AutomationRun).where(AutomationRun.id == run_uuid)).scalar_one_or_none()
+            if run is not None:
+                emit_automation_event(
+                    db,
+                    company_id=run.company_id,
+                    project_id=run.project_id,
+                    run_id=run.id,
+                    event_type="AutomationRunRetryScheduled",
+                    status="error",
+                    metadata_json={"error": str(exc), "attempt": attempt},
+                )
+                db.commit()
+            countdown = min(300, 10 * (2 ** (attempt - 1)))
+            logger.warning(
+                "automation_run_retry run_id=%s attempt=%s countdown=%s error=%s",
+                run_id,
+                attempt,
+                countdown,
+                str(exc),
+            )
+            try:
+                raise self.retry(exc=exc, countdown=countdown)
+            except MaxRetriesExceededError:
+                run = db.execute(select(AutomationRun).where(AutomationRun.id == run_uuid)).scalar_one_or_none()
+                if run is not None:
+                    run.status = AutomationRunStatus.FAILED.value
+                    run.finished_at = datetime.now(UTC)
+                    run.error_message = str(exc)
+                    emit_automation_event(
+                        db,
+                        company_id=run.company_id,
+                        project_id=run.project_id,
+                        run_id=run.id,
+                        event_type="AutomationRunFailed",
+                        status="error",
+                        metadata_json={"error": str(exc), "attempt": attempt, "reason": "max_retries_exceeded"},
+                    )
+                    db.commit()
+                logger.exception("automation_run_max_retries run_id=%s", run_id)
+                return {"status": "failed", "error": str(exc)}
 
 
 @celery_app.task(bind=True, name="workers.tasks.publish_post", max_retries=MAX_TASK_RETRIES, acks_late=True)

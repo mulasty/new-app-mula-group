@@ -19,7 +19,15 @@ celery_app.conf.update(
         "publish-scheduler-every-30s": {
             "task": "workers.tasks.schedule_due_posts",
             "schedule": schedule(30.0),
-        }
+        },
+        "automation-scheduler-every-30s": {
+            "task": "workers.tasks.schedule_due_automation_rules",
+            "schedule": schedule(30.0),
+        },
+        "automation-event-rules-every-20s": {
+            "task": "workers.tasks.process_publish_event_rules",
+            "schedule": schedule(20.0),
+        },
     },
 )
 
