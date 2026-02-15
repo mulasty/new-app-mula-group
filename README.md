@@ -1,6 +1,6 @@
 # Control Center - SaaS Bootstrap
 
-Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQL, Redis, Celery, and Alembic migrations.
+Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQL, Redis, Celery, and a React dashboard.
 
 ## Stack
 
@@ -11,14 +11,16 @@ Control Center is a multi-tenant SaaS starter repository with FastAPI, PostgreSQ
 - Redis
 - Celery
 - Alembic
+- React + TypeScript + Vite + Tailwind
 - Docker + Docker Compose
 
-## Quick Start
+## Quick Start (Full Stack)
 
-1. Create environment file:
+1. Create environment files:
 
 ```bash
 cp .env.example .env
+cp dashboard/.env.example dashboard/.env
 ```
 
 2. Start the system:
@@ -27,36 +29,91 @@ cp .env.example .env
 docker compose up --build
 ```
 
-3. Verify endpoints:
+3. Open apps:
+
+- Backend API: `http://localhost:8000`
+- Dashboard: `http://localhost:3000`
+
+## Dashboard Local Development
 
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/tenant/context
+cd dashboard
+npm install
+npm run dev
 ```
 
-The backend container runs `alembic upgrade head` before API startup.
+Dashboard env (`dashboard/.env`):
 
-## Auth Skeleton
+```env
+VITE_API_BASE_URL=/api
+VITE_PROXY_TARGET=http://localhost:8000
+```
 
-- `POST /auth/register` (requires `X-Tenant-ID` header)
-- `POST /auth/login` (requires `X-Tenant-ID` header)
-- `GET /auth/me` (requires Bearer token)
+## Auth, Signup and RBAC (Backend)
+
+- `POST /signup` creates Company + Owner + trial subscription and returns tokens
+- `POST /auth/login` uses `X-Tenant-ID` and returns access/refresh JWT
+- `POST /auth/refresh` rotates access/refresh pair from refresh token
+- `GET /auth/me` requires Bearer access token
+- `POST /projects` requires role `Owner` or `Admin`
 
 ## Tenant Context
 
-Set the tenant on each request with header:
+Set tenant for tenant-scoped endpoints:
 
 ```text
 X-Tenant-ID: <company-uuid>
 ```
 
-## Local Backend Development (optional)
+## Dev Seed
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head
-uvicorn main:app --reload
+python scripts/seed_dev_data.py
 ```
+
+Default dev owner credentials:
+- email: `owner@controlcenter.local`
+- password: `devpassword123`
+
+## Tests (integration)
+
+Requires PostgreSQL reachable by `TEST_DATABASE_URL` (or `DATABASE_URL`):
+
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q
+```
+
+## Automation (`Makefile` / `justfile`)
+
+From repository root:
+
+```bash
+make install-dev
+make seed
+make test
+make lint
+make format
+make dashboard-install
+make dashboard-build
+make dashboard-test
+```
+
+or:
+
+```bash
+just install-dev
+just seed
+just test
+just lint
+just format
+just dashboard-install
+just dashboard-build
+just dashboard-test
+```
+
+## Testing
+
+See `TESTING.md` for quick smoke scenarios and active test credentials.

@@ -17,15 +17,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(user_id: UUID, company_id: UUID) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_access_token_expire_minutes)
+def _create_token(user_id: UUID, company_id: UUID, expires_minutes: int, token_type: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
     payload = {
         "sub": str(user_id),
         "company_id": str(company_id),
         "exp": expire,
-        "type": "access",
+        "type": token_type,
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def create_access_token(user_id: UUID, company_id: UUID) -> str:
+    return _create_token(user_id, company_id, settings.jwt_access_token_expire_minutes, "access")
+
+
+def create_refresh_token(user_id: UUID, company_id: UUID) -> str:
+    return _create_token(user_id, company_id, settings.jwt_refresh_token_expire_minutes, "refresh")
 
 
 def decode_token(token: str) -> dict:

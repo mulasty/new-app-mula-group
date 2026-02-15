@@ -22,3 +22,9 @@ Thumbs.db
 
 # Frontend
 frontend/node_modules/
+dashboard/node_modules/
+dashboard/*.tsbuildinfo
+dashboard/vite.config.js
+dashboard/vite.config.d.ts
+dashboard/tailwind.config.js
+dashboard/tailwind.config.d.ts
