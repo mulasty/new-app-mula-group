@@ -49,6 +49,13 @@ from app.interfaces.api.threads_oauth import (
     fetch_threads_profile,
     store_threads_account_and_channel,
 )
+from app.interfaces.api.x_oauth import (
+    build_x_oauth_authorization_url,
+    decode_x_state,
+    exchange_x_code_for_tokens,
+    fetch_x_profile,
+    store_x_account_and_channel,
+)
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(prefix="/channels", tags=["channels"])
@@ -510,5 +517,96 @@ def threads_oauth_callback(
 
     return RedirectResponse(
         url=build_dashboard_redirect(platform=ChannelType.THREADS.value, success=True),
+        status_code=302,
+    )
+
+
+@router.get("/x/oauth/start", status_code=status.HTTP_200_OK)
+def x_oauth_start(
+    project_id: UUID | None = Query(default=None),
+    redirect: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+):
+    project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
+    authorization_url = build_x_oauth_authorization_url(
+        company_id=tenant_id,
+        project_id=project.id,
+        user_id=current_user.id,
+    )
+    if redirect:
+        return RedirectResponse(url=authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/x/oauth/callback")
+def x_oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if error:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.X.value,
+                success=False,
+                reason=error_description or error,
+            ),
+            status_code=302,
+        )
+    if not code or not state:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.X.value,
+                success=False,
+                reason="Missing OAuth params",
+            ),
+            status_code=302,
+        )
+
+    try:
+        state_payload = decode_x_state(state)
+        company_id = UUID(state_payload["company_id"])
+        project_id = UUID(state_payload["project_id"])
+        code_verifier = str(state_payload["code_verifier"])
+
+        token_payload = exchange_x_code_for_tokens(code=code, code_verifier=code_verifier)
+        access_token = str(token_payload.get("access_token") or "")
+        refresh_token = str(token_payload.get("refresh_token") or "")
+        expires_in = int(token_payload.get("expires_in", 3600))
+        if not access_token:
+            raise HTTPException(status_code=400, detail="X token exchange missing access token")
+
+        profile = fetch_x_profile(access_token)
+        external_account_id = str(profile.get("id") or "")
+        username = profile.get("username")
+        if not external_account_id:
+            raise HTTPException(status_code=400, detail="X profile missing id")
+
+        store_x_account_and_channel(
+            db,
+            company_id=company_id,
+            project_id=project_id,
+            external_account_id=external_account_id,
+            display_name=(str(username).strip() if username else None),
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in_seconds=expires_in,
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            url=build_dashboard_redirect(
+                platform=ChannelType.X.value,
+                success=False,
+                reason=str(exc),
+            ),
+            status_code=302,
+        )
+
+    return RedirectResponse(
+        url=build_dashboard_redirect(platform=ChannelType.X.value, success=True),
         status_code=302,
     )

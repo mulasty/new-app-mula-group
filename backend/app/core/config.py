@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     threads_redirect_uri: str = "http://localhost:8000/channels/threads/oauth/callback"
     threads_oauth_scope: str = "threads_basic,threads_content_publish"
 
+    x_client_id: str | None = None
+    x_client_secret: str | None = None
+    x_redirect_uri: str = "http://localhost:8000/channels/x/oauth/callback"
+    x_oauth_scope: str = "tweet.read tweet.write users.read offline.access"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
