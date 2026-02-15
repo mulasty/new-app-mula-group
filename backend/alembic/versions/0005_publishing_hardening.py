@@ -1,7 +1,7 @@
 """add publishing hardening tables and post partial status
 
 Revision ID: 0005_publishing_hardening
-Revises: 0004_connector_foundation_social_accounts
+Revises: 0004_social_accounts
 Create Date: 2026-02-16 00:20:00
 """
 
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "0005_publishing_hardening"
-down_revision = "0004_connector_foundation_social_accounts"
+down_revision = "0004_social_accounts"
 branch_labels = None
 depends_on = None
 
