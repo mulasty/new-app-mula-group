@@ -16,6 +16,7 @@ class ChannelType(StrEnum):
     TIKTOK = "tiktok"
     THREADS = "threads"
     X = "x"
+    PINTEREST = "pinterest"
 
 
 class ChannelStatus(StrEnum):

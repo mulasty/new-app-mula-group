@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     x_redirect_uri: str = "http://localhost:8000/channels/x/oauth/callback"
     x_oauth_scope: str = "tweet.read tweet.write users.read offline.access"
 
+    pinterest_client_id: str | None = None
+    pinterest_client_secret: str | None = None
+    pinterest_redirect_uri: str = "http://localhost:8000/channels/pinterest/oauth/callback"
+    pinterest_oauth_scope: str = "pins:read,pins:write,boards:read,user_accounts:read"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

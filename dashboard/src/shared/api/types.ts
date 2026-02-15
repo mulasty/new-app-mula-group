@@ -56,6 +56,7 @@ export type ChannelType =
   | "tiktok"
   | "threads"
   | "x"
+  | "pinterest"
   | "youtube";
 export type ChannelStatus = "active" | "disabled";
 export type ChannelCapabilities = {
