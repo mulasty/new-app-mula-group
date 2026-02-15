@@ -105,6 +105,82 @@ Implementation details:
 - Redis cache with short TTL (45s)
 - indexes optimized for analytics reads on `publish_events`
 
+## Campaign Automation Engine (Phase-6)
+
+Phase 6 introduces tenant-safe campaign automation runtime with scheduling, event triggers, AI generation, approvals, and execution tracking.
+
+New backend domains:
+- `campaigns`
+- `automation_rules`
+- `content_templates`
+- `content_items`
+- `approvals`
+- `automation_runs`
+- `automation_events`
+
+New endpoints (tenant-scoped, require `Authorization` + `X-Tenant-ID`):
+- Campaigns:
+  - `POST /campaigns`
+  - `GET /campaigns?project_id=...`
+  - `PATCH /campaigns/{id}`
+  - `POST /campaigns/{id}/activate`
+  - `POST /campaigns/{id}/pause`
+- Templates:
+  - `POST /templates`
+  - `GET /templates?project_id=...`
+  - `PATCH /templates/{id}`
+- Automation rules:
+  - `POST /automation/rules`
+  - `GET /automation/rules?project_id=...&campaign_id=...`
+  - `PATCH /automation/rules/{id}`
+  - `POST /automation/rules/{id}/run-now`
+- Content studio:
+  - `GET /content?project_id=...&status=...`
+  - `POST /content`
+  - `POST /content/{id}/approve`
+  - `POST /content/{id}/reject`
+  - `POST /content/{id}/schedule`
+- Monitoring:
+  - `GET /automation/runs?project_id=...&rule_id=...`
+  - `GET /automation/runs/{id}/events`
+- Calendar:
+  - `GET /calendar?project_id=...&from=...&to=...`
+
+Automation runtime:
+- Celery Beat schedules:
+  - `workers.tasks.schedule_due_automation_rules` (every 30s)
+  - `workers.tasks.process_publish_event_rules` (every 20s)
+- Worker task:
+  - `workers.tasks.execute_automation_run`
+
+AI provider configuration (OpenAI):
+- `AI_PROVIDER=openai`
+- `OPENAI_API_KEY=...`
+- `OPENAI_MODEL=gpt-4o-mini`
+- `OPENAI_BASE_URL=https://api.openai.com/v1`
+- `OPENAI_TIMEOUT_SECONDS=30`
+- `OPENAI_TEMPERATURE=0.2`
+
+Guardrails currently enforced in runtime:
+- max posts/day per project
+- quiet hours
+- blackout dates
+- duplicate topic detection (`duplicate_topic_days`)
+- approval-required escalation
+
+Dashboard additions:
+- `/app/campaigns`
+- `/app/automations`
+- `/app/content-studio`
+- `/app/calendar`
+
+Manual test checklist:
+1. Create project, campaign, and template.
+2. Create automation rule and trigger `run-now`.
+3. Verify `automation_runs` + `automation_events`.
+4. Review content in Content Studio (`approve` / `reject` / `schedule`).
+5. Verify scheduled items in Calendar.
+
 ## LinkedIn Connector (Phase-5.1)
 
 LinkedIn connector extends the channel adapter architecture and publishes asynchronously via Celery worker.
