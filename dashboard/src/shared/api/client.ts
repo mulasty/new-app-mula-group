@@ -18,6 +18,14 @@ type ClientHandlers = {
 let handlers: ClientHandlers = {};
 let refreshAttempted = false;
 
+function shouldBypassRefresh(url?: string): boolean {
+  if (!url) {
+    return false;
+  }
+
+  return ["/auth/login", "/auth/register", "/signup", "/auth/refresh"].some((path) => url.includes(path));
+}
+
 function getErrorMessage(error: AxiosError): string {
   const detail =
     error.response?.data && typeof error.response.data === "object"
@@ -65,6 +73,11 @@ api.interceptors.response.use(
   },
   async (error: AxiosError) => {
     const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    const requestUrl = originalRequest?.url;
+
+    if (shouldBypassRefresh(requestUrl)) {
+      return Promise.reject(error);
+    }
 
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry && !refreshAttempted) {
       originalRequest._retry = true;

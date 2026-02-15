@@ -5,6 +5,7 @@ import { z } from "zod";
 import { useAuth } from "@/app/providers/AuthProvider";
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
+import { getApiErrorMessage } from "@/shared/api/errors";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
 import { Input } from "@/shared/components/ui/Input";
@@ -33,7 +34,7 @@ const registerSchema = z.object({
   email: z.string().email("Podaj poprawny email"),
   password: z.string().min(8, "Haslo min. 8 znakow"),
   fullName: z.string().min(2, "Podaj imie i nazwisko"),
-  tenantId: z.string().uuid("Tenant UUID jest niepoprawny"),
+  companyName: z.string().min(2, "Podaj nazwe firmy"),
 });
 
 type LoginValues = z.infer<typeof loginSchema>;
@@ -54,10 +55,10 @@ export function AuthPage(): JSX.Element {
   });
 
   const [registerValues, setRegisterValues] = useState<RegisterValues>({
-    tenantId: tenantId || (useDevAutofill ? DEV_DEFAULTS.tenantId : ""),
-    email: "",
-    password: "",
-    fullName: "",
+    email: useDevAutofill ? DEV_DEFAULTS.email : "",
+    password: useDevAutofill ? DEV_DEFAULTS.password : "",
+    fullName: useDevAutofill ? "Demo Owner" : "",
+    companyName: useDevAutofill ? "Demo Tenant" : "",
   });
 
   const [loginErrors, setLoginErrors] = useState<Partial<Record<keyof LoginValues, string>>>({});
@@ -70,7 +71,6 @@ export function AuthPage(): JSX.Element {
     }
 
     setLoginValues((prev) => ({ ...prev, tenantId: prev.tenantId || tenantId }));
-    setRegisterValues((prev) => ({ ...prev, tenantId: prev.tenantId || tenantId }));
   }, [tenantId]);
 
   const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -94,8 +94,8 @@ export function AuthPage(): JSX.Element {
       setTenant(parsed.data.tenantId);
       await loginWithPassword(parsed.data.email, parsed.data.password);
       navigate("/app");
-    } catch {
-      pushToast("Login failed", "error");
+    } catch (error) {
+      pushToast(getApiErrorMessage(error, "Login failed"), "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -110,23 +110,27 @@ export function AuthPage(): JSX.Element {
     if (!parsed.success) {
       const fieldErrors = parsed.error.flatten().fieldErrors;
       setRegisterErrors({
-        tenantId: fieldErrors.tenantId?.[0],
         email: fieldErrors.email?.[0],
         password: fieldErrors.password?.[0],
         fullName: fieldErrors.fullName?.[0],
+        companyName: fieldErrors.companyName?.[0],
       });
       setIsSubmitting(false);
       return;
     }
 
     try {
-      setTenant(parsed.data.tenantId);
-      await registerUser(parsed.data.email, parsed.data.password, parsed.data.fullName, parsed.data.tenantId);
-      pushToast("Account created. You can log in now.", "success");
-      setTab("login");
-      setLoginValues((prev) => ({ ...prev, tenantId: parsed.data.tenantId, email: parsed.data.email }));
-    } catch {
-      pushToast("Registration failed", "error");
+      const createdTenantId = await registerUser(
+        parsed.data.email,
+        parsed.data.password,
+        parsed.data.fullName,
+        parsed.data.companyName
+      );
+      setTenant(createdTenantId);
+      await loginWithPassword(parsed.data.email, parsed.data.password);
+      navigate("/app");
+    } catch (error) {
+      pushToast(getApiErrorMessage(error, "Registration failed"), "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -153,7 +157,7 @@ export function AuthPage(): JSX.Element {
         </div>
 
         {tab === "login" ? (
-          <form className="space-y-3" onSubmit={handleLogin}>
+          <form className="space-y-3" noValidate onSubmit={handleLogin}>
             <Input
               placeholder="Tenant UUID"
               value={loginValues.tenantId}
@@ -181,13 +185,13 @@ export function AuthPage(): JSX.Element {
             </Button>
           </form>
         ) : (
-          <form className="space-y-3" onSubmit={handleRegister}>
+          <form className="space-y-3" noValidate onSubmit={handleRegister}>
             <Input
-              placeholder="Tenant UUID"
-              value={registerValues.tenantId}
-              onChange={(event) => setRegisterValues((prev) => ({ ...prev, tenantId: event.target.value }))}
+              placeholder="Nazwa firmy"
+              value={registerValues.companyName}
+              onChange={(event) => setRegisterValues((prev) => ({ ...prev, companyName: event.target.value }))}
             />
-            {registerErrors.tenantId ? <p className="text-xs text-red-600">{registerErrors.tenantId}</p> : null}
+            {registerErrors.companyName ? <p className="text-xs text-red-600">{registerErrors.companyName}</p> : null}
 
             <Input
               placeholder="Email"

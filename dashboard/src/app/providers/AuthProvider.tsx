@@ -18,7 +18,13 @@ type AuthContextType = {
   isAuthenticated: boolean;
   isBootstrapping: boolean;
   loginWithPassword: (email: string, password: string) => Promise<void>;
-  registerUser: (email: string, password: string, fullName: string, tenantId: string) => Promise<void>;
+  registerUser: (
+    email: string,
+    password: string,
+    fullName: string,
+    companyName: string,
+    tenantId?: string
+  ) => Promise<string>;
   logout: () => void;
   refreshMe: () => Promise<void>;
 };
@@ -115,10 +121,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }): JSX.E
     email: string,
     password: string,
     fullName: string,
-    tenantId: string
-  ): Promise<void> => {
-    await register({ email, password, full_name: fullName, tenant_id: tenantId });
+    companyName: string,
+    tenantId?: string
+  ): Promise<string> => {
+    const result = await register({
+      email,
+      password,
+      full_name: fullName,
+      company_name: companyName,
+      tenant_id: tenantId,
+    });
     pushToast("Registration successful", "success");
+    return result.tenant_id;
   };
 
   const value = useMemo<AuthContextType>(

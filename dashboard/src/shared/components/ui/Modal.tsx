@@ -32,9 +32,9 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps): J
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 md:items-center" onClick={onClose}>
       <div
-        className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+        className="my-6 flex max-h-[calc(100vh-3rem)] w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
@@ -43,7 +43,7 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps): J
             x
           </Button>
         </div>
-        <div>{children}</div>
+        <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
         {footer ? <div className="mt-5 flex justify-end gap-2">{footer}</div> : null}
       </div>
     </div>,
