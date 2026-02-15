@@ -73,3 +73,21 @@ export async function createWebsiteChannel(
     tenantId
   );
 }
+
+export async function getLinkedInOauthStartUrl(projectId?: string): Promise<string> {
+  const response = await api.get<{ authorization_url: string }>("/channels/linkedin/oauth/start", {
+    params: {
+      ...(projectId ? { project_id: projectId } : {}),
+      redirect: false,
+    },
+  });
+  return response.data.authorization_url;
+}
+
+export async function updateChannelStatus(
+  channelId: string,
+  status: "active" | "disabled"
+): Promise<Channel> {
+  const response = await api.patch<Channel>(`/channels/${channelId}/status`, { status });
+  return response.data;
+}

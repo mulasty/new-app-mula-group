@@ -10,6 +10,7 @@ from app.infrastructure.db.base import Base
 
 class ChannelType(StrEnum):
     WEBSITE = "website"
+    LINKEDIN = "linkedin"
 
 
 class ChannelStatus(StrEnum):

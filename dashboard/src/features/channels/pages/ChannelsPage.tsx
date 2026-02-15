@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
-import { createWebsiteChannel, listChannels } from "@/shared/api/channelsApi";
+import { createWebsiteChannel, getLinkedInOauthStartUrl, listChannels } from "@/shared/api/channelsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
 import { EmptyState } from "@/shared/components/EmptyState";
@@ -16,6 +16,7 @@ import { Spinner } from "@/shared/components/ui/Spinner";
 import { getActiveProjectId } from "@/shared/utils/storage";
 
 export function ChannelsPage(): JSX.Element {
+  const location = useLocation();
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
@@ -23,6 +24,7 @@ export function ChannelsPage(): JSX.Element {
 
   const [activeProjectId, setActiveProject] = useState("");
   const [channelName, setChannelName] = useState("Website");
+  const [oauthFeedback, setOauthFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   useEffect(() => {
     if (!tenantId) {
@@ -47,11 +49,14 @@ export function ChannelsPage(): JSX.Element {
   const createMutation = useMutation({
     mutationFn: () => createWebsiteChannel(activeProjectId, tenantId, channelName.trim() || "Website"),
     onSuccess: (created) => {
-      queryClient.setQueryData(["channels", tenantId, activeProjectId], (current: { items?: unknown[]; source?: string } | undefined) => ({
-        items: [created.item, ...(current?.items ?? [])],
-        source: created.source,
-        backendMissing: created.backendMissing,
-      }));
+      queryClient.setQueryData(
+        ["channels", tenantId, activeProjectId],
+        (current: { items?: unknown[]; source?: string } | undefined) => ({
+          items: [created.item, ...(current?.items ?? [])],
+          source: created.source,
+          backendMissing: created.backendMissing,
+        })
+      );
       pushToast("Website channel connected", "success");
     },
     onError: (error) => {
@@ -59,11 +64,44 @@ export function ChannelsPage(): JSX.Element {
     },
   });
 
+  const linkedInMutation = useMutation({
+    mutationFn: () => getLinkedInOauthStartUrl(activeProjectId || undefined),
+    onSuccess: (authorizationUrl) => {
+      window.location.assign(authorizationUrl);
+    },
+    onError: (error) => {
+      pushToast(getApiErrorMessage(error, "Failed to start LinkedIn OAuth"), "error");
+    },
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const linkedInState = params.get("linkedin");
+    const reason = params.get("reason");
+    if (!linkedInState) {
+      return;
+    }
+
+    if (linkedInState === "connected") {
+      setOauthFeedback({ type: "success", message: "LinkedIn account connected successfully." });
+      pushToast("LinkedIn connected", "success");
+      queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
+    } else {
+      setOauthFeedback({
+        type: "error",
+        message: reason ? `LinkedIn connection failed: ${reason}` : "LinkedIn connection failed.",
+      });
+      pushToast("LinkedIn connection failed", "error");
+    }
+
+    navigate("/app/channels", { replace: true });
+  }, [location.search, navigate, pushToast, queryClient, tenantId, activeProjectId]);
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Channels"
-        description="Connect website channels per project for publishing."
+        description="Connect website and LinkedIn channels per project for publishing."
         actions={
           <ProjectSwitcher
             tenantId={tenantId}
@@ -109,7 +147,29 @@ export function ChannelsPage(): JSX.Element {
                 {createMutation.isPending ? "Connecting..." : "Connect website channel"}
               </Button>
             </div>
+            <div className="mt-3 border-t border-slate-200 pt-3">
+              <Button
+                type="button"
+                className="w-full bg-[#0A66C2] hover:bg-[#084f95]"
+                disabled={!activeProjectId || linkedInMutation.isPending}
+                onClick={() => linkedInMutation.mutate()}
+              >
+                {linkedInMutation.isPending ? "Connecting LinkedIn..." : "Connect LinkedIn"}
+              </Button>
+            </div>
           </Card>
+
+          {oauthFeedback ? (
+            <div
+              className={`rounded-md border px-3 py-2 text-sm ${
+                oauthFeedback.type === "success"
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : "border-red-300 bg-red-50 text-red-700"
+              }`}
+            >
+              {oauthFeedback.message}
+            </div>
+          ) : null}
 
           {isEndpointMissing(channelsQuery.error) ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">

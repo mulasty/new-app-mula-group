@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
     jwt_refresh_token_expire_minutes: int = 10080
+    token_encryption_key: str | None = None
+
+    linkedin_client_id: str | None = None
+    linkedin_client_secret: str | None = None
+    linkedin_redirect_uri: str = "http://localhost:8000/channels/linkedin/oauth/callback"
+    linkedin_dashboard_redirect_url: str = "http://localhost:3000/app/channels"
+    linkedin_oauth_scope: str = "openid profile w_member_social"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -48,8 +48,16 @@ export type Project = {
   created_at?: string;
 };
 
-export type ChannelType = "website" | "facebook" | "instagram" | "youtube";
+export type ChannelType = "website" | "linkedin" | "facebook" | "instagram" | "youtube";
 export type ChannelStatus = "active" | "disabled";
+export type ChannelCapabilities = {
+  text?: boolean;
+  image?: boolean;
+  video?: boolean;
+  reels?: boolean;
+  shorts?: boolean;
+  max_length?: number;
+};
 
 export type Channel = {
   id: string;
@@ -58,12 +66,13 @@ export type Channel = {
   type: ChannelType;
   name?: string;
   status?: ChannelStatus;
+  capabilities_json?: ChannelCapabilities;
   credentials_json?: string;
   created_at?: string;
   updated_at?: string;
 };
 
-export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed";
+export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "published_partial" | "failed";
 
 export type PostItem = {
   id: string;
@@ -102,4 +111,29 @@ export type WebsitePublication = {
   content: string;
   published_at: string;
   created_at: string;
+};
+
+export type PublishingSummary = {
+  scheduled: number;
+  publishing: number;
+  published: number;
+  failed: number;
+  success_rate: number;
+  avg_publish_time_sec: number;
+};
+
+export type PublishingTimeRange = "7d" | "30d" | "90d";
+
+export type PublishingTimeseriesPoint = {
+  date: string;
+  published: number;
+  failed: number;
+};
+
+export type ActivityStreamItem = {
+  timestamp: string;
+  post_id: string;
+  event_type: string;
+  status: "ok" | "error";
+  metadata: Record<string, unknown>;
 };
