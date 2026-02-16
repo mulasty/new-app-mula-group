@@ -994,6 +994,93 @@ Post quality:
 2. Redeploy previous app image if needed.
 3. Keep migration (additive schema) in place; previous code remains compatible.
 
+## V1 Finalization - Phase D (Stripe Subscription Lifecycle)
+
+### Migration Summary
+
+- `0018_stripe_lifecycle_v1`
+  - `subscription_plans`:
+    - `stripe_price_id`
+    - `stripe_product_id`
+  - `company_subscriptions`:
+    - `current_period_start`
+    - `cancel_at_period_end`
+    - `grace_period_end`
+    - `last_invoice_status`
+    - `last_payment_error`
+  - new table `stripe_events` for webhook dedupe + processing state
+
+### New/Updated Endpoints
+
+- Billing:
+  - `POST /billing/checkout-session` (supports `plan_id` and legacy `plan_name`)
+  - `POST /billing/portal-session`
+  - `POST /billing/change-plan`
+  - `GET /billing/status`
+- Admin:
+  - `GET /admin/billing/events?status=error`
+  - `POST /admin/billing/reprocess-event/{stripe_event_id}`
+  - `PATCH /admin/billing/plans/{plan_id}/stripe-mapping`
+- Webhooks:
+  - hardened `POST /webhooks/stripe` with signature verification + dedupe
+
+### New Environment Variables
+
+- `STRIPE_BILLING_PORTAL_RETURN_URL`
+- `STRIPE_WEBHOOK_TOLERANCE_SECONDS`
+- `BILLING_PRORATION_MODE` (`always_invoice` | `create_prorations` | `none`)
+- `BILLING_GRACE_PERIOD_DAYS`
+- `BILLING_PAST_DUE_ALLOW_WRITE`
+- `BILLING_RESTRICT_CONNECTORS_IN_GRACE`
+
+### Stripe CLI Dev Guide
+
+1. Login:
+   - `stripe login`
+2. Forward webhooks:
+   - `stripe listen --forward-to localhost:8000/webhooks/stripe`
+3. Trigger events:
+   - `stripe trigger invoice.payment_failed`
+   - `stripe trigger invoice.paid`
+   - `stripe trigger customer.subscription.updated`
+
+### Smoke Test Checklist
+
+1. Enable flags:
+   - `beta_public_pricing`
+   - `v1_billing_enforcement`
+2. Run checkout:
+   - `POST /billing/checkout-session` with `plan_id`
+3. Open portal:
+   - `POST /billing/portal-session`
+4. Webhook processing:
+   - verify `stripe_events` stores `processed`/`error` status
+5. Change plan:
+   - `POST /billing/change-plan`
+6. Past-due behavior:
+   - trigger `invoice.payment_failed`
+   - verify `GET /billing/status` shows `past_due` and grace countdown
+7. After grace, verify write actions are blocked with:
+   - `error_code=BILLING_REQUIRED`
+
+### Rollback Plan
+
+1. Disable `v1_billing_enforcement` flag.
+2. Keep webhook intake active; reprocess failed Stripe events after rollback.
+3. Revert app image to previous release (schema remains additive and backward-compatible).
+4. Validate with:
+   - `scripts/preflight_check.sh`
+   - `scripts/smoke_all.sh`
+
+### Go-Live Checklist
+
+1. Set real Stripe keys and webhook secret.
+2. Map each plan to Stripe price IDs (env or admin mapping endpoint).
+3. Enable `beta_public_pricing` and `v1_billing_enforcement` for pilot tenants.
+4. Validate checkout, portal, change-plan and webhook round-trip in staging.
+5. Confirm admin event monitoring and reprocess endpoint.
+6. Roll out flags progressively to production tenants.
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

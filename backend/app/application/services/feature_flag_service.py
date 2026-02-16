@@ -32,6 +32,7 @@ FLAG_KEYS = [
     ("v1_connector_webhooks", "Provider webhook verification and dedup"),
     ("v1_ai_quality_engine", "Brand profiles and deterministic post quality checks"),
     ("v1_ai_quality_gate", "Block publish when post risk is high or blocked by quality checks"),
+    ("v1_billing_enforcement", "Billing-aware write restrictions and grace-period controls"),
 ]
 
 

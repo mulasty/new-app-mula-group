@@ -26,6 +26,34 @@ export async function createCheckoutSession(planName: string): Promise<{ checkou
   return response.data;
 }
 
+export async function createCheckoutSessionByPlanId(
+  planId: string,
+  successUrl?: string,
+  cancelUrl?: string
+): Promise<{ checkout_url?: string | null; session_id?: string | null }> {
+  const response = await api.post<{ checkout_url?: string | null; session_id?: string | null }>("/billing/checkout-session", {
+    plan_id: planId,
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+  });
+  return response.data;
+}
+
+export async function createBillingPortalSession(returnUrl?: string): Promise<{ portal_url: string }> {
+  const response = await api.post<{ portal_url: string }>("/billing/portal-session", { return_url: returnUrl });
+  return response.data;
+}
+
+export async function changePlan(planId: string): Promise<{ updated: boolean }> {
+  const response = await api.post<{ updated: boolean }>("/billing/change-plan", { plan_id: planId });
+  return response.data;
+}
+
+export async function getBillingStatus(): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>("/billing/status");
+  return response.data;
+}
+
 export async function upgradeSubscription(planName: string): Promise<{ updated: boolean }> {
   const response = await api.post<{ updated: boolean }>("/billing/upgrade", { plan_name: planName });
   return response.data;

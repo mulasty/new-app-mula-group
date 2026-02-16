@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,13 +19,20 @@ from app.domain.models.company_usage import CompanyUsage
 from app.domain.models.post import Post
 from app.domain.models.project import Project
 from app.domain.models.publish_event import PublishEvent
+from app.domain.models.stripe_event import StripeEvent
+from app.domain.models.subscription_plan import SubscriptionPlan
 from app.domain.models.user import User, UserRole
 from app.domain.models.webhook_event import WebhookEvent
 from app.interfaces.api.deps import get_current_user, require_platform_admin
-from app.interfaces.api.stripe_webhooks import process_stripe_event_payload
+from app.application.services.stripe_webhook_service import process_stripe_event_payload
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class StripePlanMappingRequest(BaseModel):
+    stripe_price_id: str | None = None
+    stripe_product_id: str | None = None
 
 
 def _ensure_admin_panel_enabled(db: Session) -> None:
@@ -55,11 +63,97 @@ def list_tenants(
                 "name": company.name,
                 "slug": company.slug,
                 "subscription_status": subscription.status if subscription else "n/a",
+                "subscription_plan_id": str(subscription.plan_id) if subscription else None,
+                "last_payment_error": (subscription.last_payment_error if subscription else None),
                 "posts_used_current_period": int(usage.posts_used_current_period if usage else 0),
                 "published_posts": int(posts_published or 0),
             }
         )
     return {"items": items}
+
+
+@router.get("/billing/events", status_code=status.HTTP_200_OK)
+def list_billing_events(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_platform_admin),
+) -> dict:
+    _ensure_admin_panel_enabled(db)
+    query = select(StripeEvent).order_by(StripeEvent.received_at.desc()).limit(limit)
+    if status_filter:
+        query = query.where(StripeEvent.status == status_filter)
+    rows = db.execute(query).scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(item.id),
+                "stripe_event_id": item.stripe_event_id,
+                "type": item.event_type,
+                "status": item.status,
+                "error": item.error,
+                "received_at": item.received_at.isoformat(),
+                "processed_at": item.processed_at.isoformat() if item.processed_at else None,
+            }
+            for item in rows
+        ]
+    }
+
+
+@router.post("/billing/reprocess-event/{stripe_event_id}", status_code=status.HTTP_202_ACCEPTED)
+def reprocess_billing_event(
+    stripe_event_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_platform_admin),
+) -> dict:
+    _ensure_admin_panel_enabled(db)
+    webhook_event = db.execute(
+        select(WebhookEvent).where(
+            WebhookEvent.provider == "stripe",
+            WebhookEvent.external_event_id == stripe_event_id,
+        )
+    ).scalar_one_or_none()
+    if webhook_event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stripe event payload not found")
+    result = process_stripe_event_payload(db, webhook_event.payload_json)
+    company_id_raw = (
+        ((webhook_event.payload_json.get("data") or {}).get("object") or {}).get("metadata", {}).get("company_id")
+    )
+    if company_id_raw:
+        try:
+            log_audit_event(
+                db,
+                company_id=UUID(str(company_id_raw)),
+                action="admin.billing_event_reprocessed",
+                metadata={"stripe_event_id": stripe_event_id, "admin_user_id": str(current_user.id)},
+            )
+        except ValueError:
+            pass
+    db.commit()
+    return {"reprocessed": True, "result": result}
+
+
+@router.patch("/billing/plans/{plan_id}/stripe-mapping", status_code=status.HTTP_200_OK)
+def update_plan_stripe_mapping(
+    plan_id: UUID,
+    payload: StripePlanMappingRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_platform_admin),
+) -> dict:
+    _ensure_admin_panel_enabled(db)
+    plan = db.execute(select(SubscriptionPlan).where(SubscriptionPlan.id == plan_id)).scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+    plan.stripe_price_id = payload.stripe_price_id
+    plan.stripe_product_id = payload.stripe_product_id
+    db.add(plan)
+    db.commit()
+    return {
+        "id": str(plan.id),
+        "name": plan.name,
+        "stripe_price_id": plan.stripe_price_id,
+        "stripe_product_id": plan.stripe_product_id,
+    }
 
 
 @router.get("/audit-logs", status_code=status.HTTP_200_OK)

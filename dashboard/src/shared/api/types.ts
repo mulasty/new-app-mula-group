@@ -373,6 +373,8 @@ export type BillingPlan = {
   max_projects: number;
   max_posts_per_month: number;
   max_connectors: number;
+  stripe_price_id?: string | null;
+  stripe_product_id?: string | null;
 };
 
 export type BillingSnapshot = {

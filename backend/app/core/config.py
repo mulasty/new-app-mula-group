@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     stripe_price_id_starter: str | None = None
     stripe_price_id_pro: str | None = None
     stripe_price_id_enterprise: str | None = None
+    stripe_billing_portal_return_url: str = "http://localhost:3000/app/settings"
+    stripe_webhook_tolerance_seconds: int = 300
+    billing_proration_mode: str = "create_prorations"
+    billing_grace_period_days: int = 7
+    billing_past_due_allow_write: bool = True
+    billing_restrict_connectors_in_grace: bool = False
     feature_flag_cache_ttl_seconds: int = 60
     platform_admin_emails: str = ""
     system_publish_failure_alert_threshold: float = 0.05

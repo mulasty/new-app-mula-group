@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/providers/AuthProvider";
 import { useToast } from "@/app/providers/ToastProvider";
-import { createCheckoutSession, listPublicPlans } from "@/shared/api/billingApi";
+import { createCheckoutSessionByPlanId, listPublicPlans } from "@/shared/api/billingApi";
 import { getApiErrorMessage } from "@/shared/api/errors";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
@@ -19,7 +19,7 @@ export function PricingPage(): JSX.Element {
   });
 
   const checkoutMutation = useMutation({
-    mutationFn: (planName: string) => createCheckoutSession(planName),
+    mutationFn: (planId: string) => createCheckoutSessionByPlanId(planId),
     onSuccess: (result) => {
       if (result.checkout_url) {
         window.location.assign(result.checkout_url);
@@ -79,7 +79,7 @@ export function PricingPage(): JSX.Element {
                       navigate(`/auth?plan=${encodeURIComponent(plan.name)}`);
                       return;
                     }
-                    checkoutMutation.mutate(plan.name);
+                    checkoutMutation.mutate(plan.id);
                   }}
                 >
                   {isAuthenticated ? "Checkout" : "Get started"}

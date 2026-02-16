@@ -2,23 +2,32 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.services.audit_service import log_audit_event
-from app.application.services.billing_service import bootstrap_company_billing
+from app.application.services.billing_service import (
+    bootstrap_company_billing,
+    get_billing_status_payload,
+    seed_plan_stripe_mapping,
+)
 from app.application.services.feature_flag_service import is_feature_enabled
-from app.application.services.stripe_checkout_service import create_checkout_session
+from app.application.services.stripe_checkout_service import (
+    change_subscription_plan,
+    create_billing_portal_session,
+    create_checkout_session,
+    create_checkout_session_by_plan_id,
+)
 from app.domain.models.billing_event import BillingEvent
 from app.domain.models.channel import Channel
 from app.domain.models.company_subscription import CompanySubscription
 from app.domain.models.company_usage import CompanyUsage
 from app.domain.models.project import Project
 from app.domain.models.subscription_plan import SubscriptionPlan
-from app.domain.models.user import User
-from app.interfaces.api.deps import get_current_user, require_tenant_id
+from app.domain.models.user import User, UserRole
+from app.interfaces.api.deps import get_current_user, require_roles, require_tenant_id
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -26,17 +35,27 @@ public_router = APIRouter(prefix="/public", tags=["public"])
 
 
 class CheckoutRequest(BaseModel):
-    plan_name: str
+    plan_id: UUID | None = None
+    plan_name: str | None = None
     success_url: str | None = None
     cancel_url: str | None = None
 
 
 class PlanUpdateRequest(BaseModel):
-    plan_name: str
+    plan_name: str | None = None
+    plan_id: UUID | None = None
 
 
 class CancelSubscriptionRequest(BaseModel):
     immediate: bool = False
+
+
+class PortalSessionRequest(BaseModel):
+    return_url: str | None = None
+
+
+class ChangePlanRequest(BaseModel):
+    plan_id: UUID
 
 
 def _serialize_plan(plan: SubscriptionPlan) -> dict:
@@ -47,6 +66,8 @@ def _serialize_plan(plan: SubscriptionPlan) -> dict:
         "max_projects": plan.max_projects,
         "max_posts_per_month": plan.max_posts_per_month,
         "max_connectors": plan.max_connectors,
+        "stripe_price_id": plan.stripe_price_id,
+        "stripe_product_id": plan.stripe_product_id,
     }
 
 
@@ -70,6 +91,8 @@ def _log_billing_event(
 
 @public_router.get("/plans", status_code=status.HTTP_200_OK)
 def list_public_plans(db: Session = Depends(get_db)) -> dict:
+    seed_plan_stripe_mapping(db)
+    db.commit()
     if not is_feature_enabled(db, key="beta_public_pricing", tenant_id=None):
         return {"items": [], "beta_disabled": True}
     plans = db.execute(select(SubscriptionPlan).order_by(SubscriptionPlan.monthly_price.asc())).scalars().all()
@@ -83,6 +106,7 @@ def list_plans(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     bootstrap_company_billing(db, company_id=tenant_id)
+    seed_plan_stripe_mapping(db)
     db.commit()
     return list_public_plans(db)
 
@@ -127,7 +151,12 @@ def get_current_plan(
         "subscription": {
             "id": str(subscription.id),
             "status": subscription.status,
+            "current_period_start": subscription.current_period_start.isoformat() if subscription.current_period_start else None,
             "current_period_end": subscription.current_period_end.isoformat() if subscription.current_period_end else None,
+            "cancel_at_period_end": bool(subscription.cancel_at_period_end),
+            "grace_period_end": subscription.grace_period_end.isoformat() if subscription.grace_period_end else None,
+            "last_invoice_status": subscription.last_invoice_status,
+            "last_payment_error": subscription.last_payment_error,
             "stripe_customer_id": subscription.stripe_customer_id,
             "stripe_subscription_id": subscription.stripe_subscription_id,
         },
@@ -144,8 +173,19 @@ def get_current_plan(
             "in_grace_period": in_grace_period,
             "expired": expired,
             "days_left_in_period": days_left,
-        }
+        },
     }
+
+
+@router.get("/status", status_code=status.HTTP_200_OK)
+def billing_status(
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    bootstrap_company_billing(db, company_id=tenant_id)
+    db.commit()
+    return get_billing_status_payload(db, company_id=tenant_id)
 
 
 @router.post("/checkout-session", status_code=status.HTTP_201_CREATED)
@@ -153,25 +193,88 @@ def create_checkout(
     payload: CheckoutRequest,
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
     if not is_feature_enabled(db, key="beta_public_pricing", tenant_id=tenant_id):
         return {"checkout_url": None, "session_id": None, "beta_disabled": True}
-    session = create_checkout_session(
-        db,
-        company_id=tenant_id,
-        plan_name=payload.plan_name,
-        success_url=payload.success_url,
-        cancel_url=payload.cancel_url,
-    )
+    if payload.plan_id is not None:
+        session = create_checkout_session_by_plan_id(
+            db,
+            company_id=tenant_id,
+            plan_id=payload.plan_id,
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
+        )
+    elif payload.plan_name:
+        session = create_checkout_session(
+            db,
+            company_id=tenant_id,
+            plan_name=payload.plan_name,
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
+        )
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="plan_id or plan_name is required")
     log_audit_event(
         db,
         company_id=tenant_id,
         action="subscription.checkout_started",
-        metadata={"plan_name": payload.plan_name, "user_id": str(current_user.id), "session_id": session.session_id},
+        metadata={
+            "plan_id": str(payload.plan_id) if payload.plan_id else None,
+            "plan_name": payload.plan_name,
+            "user_id": str(current_user.id),
+            "session_id": session.session_id,
+        },
     )
     db.commit()
     return {"checkout_url": session.checkout_url, "session_id": session.session_id}
+
+
+@router.post("/portal-session", status_code=status.HTTP_201_CREATED)
+def create_portal_session(
+    payload: PortalSessionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+) -> dict:
+    result = create_billing_portal_session(
+        db,
+        company_id=tenant_id,
+        return_url=payload.return_url,
+    )
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="subscription.portal_opened",
+        metadata={"user_id": str(current_user.id)},
+    )
+    db.commit()
+    return {"portal_url": result.portal_url}
+
+
+@router.post("/change-plan", status_code=status.HTTP_200_OK)
+def change_plan(
+    payload: ChangePlanRequest,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+) -> dict:
+    result = change_subscription_plan(db, company_id=tenant_id, plan_id=payload.plan_id)
+    _log_billing_event(
+        db,
+        tenant_id=tenant_id,
+        event_type="subscription.plan_change_requested",
+        message="Subscription plan change requested",
+        metadata={"plan_id": str(payload.plan_id), "user_id": str(current_user.id)},
+    )
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="subscription.plan_change_requested",
+        metadata={"plan_id": str(payload.plan_id), "user_id": str(current_user.id)},
+    )
+    db.commit()
+    return result
 
 
 @router.post("/upgrade", status_code=status.HTTP_200_OK)
@@ -179,15 +282,15 @@ def upgrade_plan(
     payload: PlanUpdateRequest,
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
     bootstrap_company_billing(db, company_id=tenant_id)
     subscription = db.execute(
         select(CompanySubscription).where(CompanySubscription.company_id == tenant_id)
     ).scalar_one()
-    plan = db.execute(
-        select(SubscriptionPlan).where(SubscriptionPlan.name == payload.plan_name.strip())
-    ).scalar_one_or_none()
+    if not payload.plan_name:
+        return {"updated": False, "message": "plan_name is required"}
+    plan = db.execute(select(SubscriptionPlan).where(SubscriptionPlan.name == payload.plan_name.strip())).scalar_one_or_none()
     if plan is None:
         return {"updated": False, "message": "Plan not found"}
 
@@ -218,15 +321,15 @@ def downgrade_plan(
     payload: PlanUpdateRequest,
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
     bootstrap_company_billing(db, company_id=tenant_id)
     subscription = db.execute(
         select(CompanySubscription).where(CompanySubscription.company_id == tenant_id)
     ).scalar_one()
-    plan = db.execute(
-        select(SubscriptionPlan).where(SubscriptionPlan.name == payload.plan_name.strip())
-    ).scalar_one_or_none()
+    if not payload.plan_name:
+        return {"updated": False, "message": "plan_name is required"}
+    plan = db.execute(select(SubscriptionPlan).where(SubscriptionPlan.name == payload.plan_name.strip())).scalar_one_or_none()
     if plan is None:
         return {"updated": False, "message": "Plan not found"}
 
@@ -255,7 +358,7 @@ def cancel_subscription(
     payload: CancelSubscriptionRequest,
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
     bootstrap_company_billing(db, company_id=tenant_id)
     subscription = db.execute(
@@ -291,7 +394,7 @@ def cancel_subscription(
 def reactivate_subscription(
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
     bootstrap_company_billing(db, company_id=tenant_id)
     subscription = db.execute(

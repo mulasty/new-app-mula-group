@@ -33,6 +33,7 @@ from app.domain.models.revenue_metric import RevenueMetric
 from app.domain.models.social_account import SocialAccount
 from app.domain.models.subscription import Subscription
 from app.domain.models.subscription_plan import SubscriptionPlan
+from app.domain.models.stripe_event import StripeEvent
 from app.domain.models.revoked_token import RevokedToken
 from app.domain.models.feature_flag import FeatureFlag
 from app.domain.models.webhook_event import WebhookEvent
@@ -76,6 +77,7 @@ __all__ = [
     "CompanySubscription",
     "CompanyUsage",
     "SubscriptionPlan",
+    "StripeEvent",
     "FeatureFlag",
     "SystemHealth",
     "TenantRiskScore",

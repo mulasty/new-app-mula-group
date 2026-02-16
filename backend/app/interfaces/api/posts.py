@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.application.services.publishing_service import emit_publish_event, publish_post_async
 from app.application.services.audit_service import log_audit_event
-from app.application.services.billing_service import enforce_post_limit, increment_post_usage
+from app.application.services.billing_service import enforce_billing_write_access, enforce_post_limit, increment_post_usage
 from app.application.services.feature_flag_service import is_feature_enabled
 from app.application.services.post_quality_service import (
     create_post_quality_report,
@@ -364,6 +364,7 @@ def schedule_post(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    enforce_billing_write_access(db, company_id=tenant_id, action="schedule_post")
     _enforce_tenant_risk_controls(db, tenant_id=tenant_id)
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:
@@ -406,6 +407,7 @@ def publish_now(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    enforce_billing_write_access(db, company_id=tenant_id, action="publish_post")
     _enforce_tenant_risk_controls(db, tenant_id=tenant_id)
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:

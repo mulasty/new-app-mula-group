@@ -7,8 +7,10 @@ import { useToast } from "@/app/providers/ToastProvider";
 import { me } from "@/shared/api/authApi";
 import {
   cancelSubscription,
+  createBillingPortalSession,
   createCheckoutSession,
   downgradeSubscription,
+  getBillingStatus,
   getBillingHistory,
   getCurrentBilling,
   reactivateSubscription,
@@ -65,6 +67,11 @@ export function SettingsPage(): JSX.Element {
   const billingHistoryQuery = useQuery({
     queryKey: ["billingHistory", tenantId],
     queryFn: () => getBillingHistory(30),
+    enabled: Boolean(tenantId),
+  });
+  const billingStatusQuery = useQuery({
+    queryKey: ["billingStatus", tenantId],
+    queryFn: () => getBillingStatus(),
     enabled: Boolean(tenantId),
   });
   const projectsQuery = useQuery({
@@ -139,6 +146,15 @@ export function SettingsPage(): JSX.Element {
       ]);
     },
     onError: (error) => pushToast(getApiErrorMessage(error, "Failed to reactivate subscription"), "error"),
+  });
+  const portalMutation = useMutation({
+    mutationFn: () => createBillingPortalSession(window.location.href),
+    onSuccess: (result) => {
+      if (result.portal_url) {
+        window.location.assign(result.portal_url);
+      }
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to open billing portal"), "error"),
   });
   const brandProfileMutation = useMutation({
     mutationFn: async () => {
@@ -245,6 +261,11 @@ export function SettingsPage(): JSX.Element {
                 Grace period active. Days left: {billingQuery.data.lifecycle.days_left_in_period}
               </div>
             ) : null}
+            {billingStatusQuery.data && typeof billingStatusQuery.data.status === "string" ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                Billing status: <span className="font-semibold">{String(billingStatusQuery.data.status)}</span>
+              </div>
+            ) : null}
             {billingQuery.data.lifecycle?.expired ? (
               <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
                 Plan expired. Reactivate or upgrade to restore full publishing.
@@ -290,6 +311,14 @@ export function SettingsPage(): JSX.Element {
                 }}
               >
                 Open checkout
+              </Button>
+              <Button
+                type="button"
+                className="bg-slate-700 hover:bg-slate-600"
+                onClick={() => portalMutation.mutate()}
+                disabled={portalMutation.isPending}
+              >
+                {portalMutation.isPending ? "Opening..." : "Manage billing"}
               </Button>
             </div>
           </div>
