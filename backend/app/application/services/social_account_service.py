@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.services.connector_credentials_service import upsert_connector_credential
 from app.core.security import encrypt_secret
 from app.domain.models.social_account import SocialAccount
 
@@ -50,6 +51,16 @@ def upsert_social_account(
         account.metadata_json = metadata_json or account.metadata_json or {}
 
     db.add(account)
+    upsert_connector_credential(
+        db,
+        tenant_id=company_id,
+        connector_type=normalized_platform,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        scopes=[],
+        status="active",
+    )
     return account
 
 
@@ -85,4 +96,14 @@ def update_social_account_tokens(
     if expires_at is not None:
         account.expires_at = expires_at
     db.add(account)
+    upsert_connector_credential(
+        db,
+        tenant_id=account.company_id,
+        connector_type=account.platform,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        scopes=[],
+        status="active",
+    )
     return account

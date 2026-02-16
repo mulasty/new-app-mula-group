@@ -27,6 +27,9 @@ FLAG_KEYS = [
     ("v1_plan_limit_visualization", "Usage bars and limit-aware UI controls"),
     ("v1_subscription_lifecycle_ux", "Upgrade/downgrade/cancel billing lifecycle experience"),
     ("v1_conversion_nudges", "Conversion-oriented contextual product nudges"),
+    ("v1_connector_hardening", "Production-grade connector hardening controls"),
+    ("v1_connector_sandbox_mode", "Connector sandbox simulation tools"),
+    ("v1_connector_webhooks", "Provider webhook verification and dedup"),
 ]
 
 

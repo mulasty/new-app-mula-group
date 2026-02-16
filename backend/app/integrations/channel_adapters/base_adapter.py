@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import re
 from typing import ClassVar
 
+from app.application.services.connector_credentials_service import is_credential_revoked
 from app.domain.models.channel import Channel
 from app.domain.models.post import Post
 
@@ -77,11 +78,17 @@ class BaseChannelAdapter(ABC):
         can_publish_media = bool(
             capabilities.get("image") or capabilities.get("video") or capabilities.get("reels") or capabilities.get("shorts")
         )
+        db = getattr(self, "db", None)
+        if db is not None and is_credential_revoked(db, tenant_id=post.company_id, connector_type=channel.type):
+            raise AdapterAuthError(f"Connector credential revoked for {channel.type}")
 
         try:
             await self.validate_credentials()
         except AdapterAuthError:
-            await self.refresh_credentials()
+            try:
+                await self.refresh_credentials()
+            except AdapterAuthError:
+                await self.refresh_credentials()
             await self.validate_credentials()
 
         if media_reference and can_publish_media:

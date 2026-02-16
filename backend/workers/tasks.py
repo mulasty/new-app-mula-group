@@ -17,6 +17,7 @@ from app.application.services.automation_service import (
 )
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import reset_monthly_post_usage as reset_monthly_post_usage_service
+from app.application.services.feature_flag_service import is_feature_enabled
 from app.application.services.platform_ops_service import (
     append_perf_sample,
     calculate_revenue_overview,
@@ -27,6 +28,19 @@ from app.application.services.platform_ops_service import (
     evaluate_platform_guardrails,
     execute_auto_recovery,
 )
+from app.application.services.connector_credentials_service import (
+    mark_connector_credential_error,
+)
+from app.application.services.connector_ops_service import (
+    calculate_connector_health,
+    get_connector_backoff_ttl,
+    get_connector_cooldown_ttl,
+    get_connector_sandbox_mode,
+    maybe_trip_connector_circuit_breaker,
+    set_connector_backoff,
+    set_connector_cooldown,
+)
+from app.application.services.provider_error_mapper import map_provider_error
 from app.domain.models.automation_run import AutomationRun, AutomationRunStatus
 from app.domain.models.channel import Channel
 from app.domain.models.channel_publication import ChannelPublication
@@ -227,6 +241,138 @@ async def _publish_channel(
                     error="Channel is disabled",
                 )
 
+            connector_hardening_enabled = is_feature_enabled(
+                db, key="v1_connector_hardening", tenant_id=company_id
+            )
+            connector_sandbox_enabled = is_feature_enabled(
+                db, key="v1_connector_sandbox_mode", tenant_id=company_id
+            )
+
+            cooldown_ttl = get_connector_cooldown_ttl(channel.id) if connector_hardening_enabled else 0
+            if connector_hardening_enabled and cooldown_ttl > 0:
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                return ChannelPublishResult(
+                    channel_id=channel.id,
+                    channel_type=channel.type,
+                    adapter_type="health_cooldown",
+                    success=False,
+                    retryable=False,
+                    publish_duration_ms=duration_ms,
+                    metadata={
+                        "error_code": "connector_temporarily_restricted",
+                        "cooldown_seconds": cooldown_ttl,
+                        "normalized_error": {
+                            "provider": channel.type,
+                            "error_code": "connector_temporarily_restricted",
+                            "category": "server_error",
+                            "retryable": False,
+                            "suggested_action": "Wait for cooldown and retry",
+                        },
+                    },
+                    error=f"Connector restricted for {cooldown_ttl}s",
+                )
+
+            backoff_ttl = get_connector_backoff_ttl(channel.id) if connector_hardening_enabled else 0
+            if connector_hardening_enabled and backoff_ttl > 0:
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                return ChannelPublishResult(
+                    channel_id=channel.id,
+                    channel_type=channel.type,
+                    adapter_type="provider_backoff",
+                    success=False,
+                    retryable=True,
+                    publish_duration_ms=duration_ms,
+                    metadata={
+                        "error_code": "provider_backoff_active",
+                        "retry_after_seconds": backoff_ttl,
+                        "normalized_error": {
+                            "provider": channel.type,
+                            "error_code": "provider_backoff_active",
+                            "category": "rate_limit",
+                            "retryable": True,
+                            "suggested_action": "Retry after cooldown",
+                        },
+                    },
+                    error=f"Provider backoff active for {backoff_ttl}s",
+                )
+
+            sandbox_mode = get_connector_sandbox_mode(channel.id) if connector_sandbox_enabled else None
+            if sandbox_mode:
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                if sandbox_mode in {"simulate_success", "success"}:
+                    return ChannelPublishResult(
+                        channel_id=channel.id,
+                        channel_type=channel.type,
+                        adapter_type="sandbox",
+                        success=True,
+                        retryable=False,
+                        publish_duration_ms=duration_ms,
+                        metadata={
+                            "external_post_id": f"sandbox_{post.id}_{channel.id}",
+                            "sandbox_mode": sandbox_mode,
+                        },
+                    )
+                if sandbox_mode in {"simulate_rate_limit", "rate_limit"}:
+                    set_connector_backoff(channel.id, seconds=120)
+                    mapped = map_provider_error(
+                        provider=channel.type,
+                        error_code="rate_limit_simulated",
+                        message="sandbox rate limit",
+                    )
+                    return ChannelPublishResult(
+                        channel_id=channel.id,
+                        channel_type=channel.type,
+                        adapter_type="sandbox",
+                        success=False,
+                        retryable=True,
+                        publish_duration_ms=duration_ms,
+                        metadata={
+                            "sandbox_mode": sandbox_mode,
+                            "normalized_error": mapped.__dict__,
+                            "error_code": mapped.error_code,
+                        },
+                        error="Sandbox simulated provider rate limit",
+                    )
+                if sandbox_mode in {"simulate_auth_expired", "auth_expired"}:
+                    mapped = map_provider_error(
+                        provider=channel.type,
+                        error_code="auth_expired_simulated",
+                        message="sandbox auth expired",
+                    )
+                    return ChannelPublishResult(
+                        channel_id=channel.id,
+                        channel_type=channel.type,
+                        adapter_type="sandbox",
+                        success=False,
+                        retryable=False,
+                        publish_duration_ms=duration_ms,
+                        metadata={
+                            "sandbox_mode": sandbox_mode,
+                            "normalized_error": mapped.__dict__,
+                            "error_code": mapped.error_code,
+                        },
+                        error="Sandbox simulated auth expiration",
+                    )
+                mapped = map_provider_error(
+                    provider=channel.type,
+                    error_code="server_error_simulated",
+                    message="sandbox connector failure",
+                )
+                return ChannelPublishResult(
+                    channel_id=channel.id,
+                    channel_type=channel.type,
+                    adapter_type="sandbox",
+                    success=False,
+                    retryable=True,
+                    publish_duration_ms=duration_ms,
+                    metadata={
+                        "sandbox_mode": sandbox_mode,
+                        "normalized_error": mapped.__dict__,
+                        "error_code": mapped.error_code,
+                    },
+                    error="Sandbox simulated provider failure",
+                )
+
             if attempt > policy.max_attempts:
                 duration_ms = int((perf_counter() - started_at) * 1000)
                 return ChannelPublishResult(
@@ -246,6 +392,8 @@ async def _publish_channel(
                 platform=channel.type,
             )
             if not rate_limit_result.allowed:
+                if connector_hardening_enabled:
+                    set_connector_backoff(channel.id, seconds=max(30, int(rate_limit_result.retry_after_seconds or 30)))
                 duration_ms = int((perf_counter() - started_at) * 1000)
                 return ChannelPublishResult(
                     channel_id=channel.id,
@@ -260,6 +408,13 @@ async def _publish_channel(
                         "rate_limit": rate_limit_result.limit,
                         "rate_limit_current": rate_limit_result.current,
                         "retry_after_seconds": rate_limit_result.retry_after_seconds,
+                        "normalized_error": {
+                            "provider": channel.type,
+                            "error_code": "platform_rate_limited",
+                            "category": "rate_limit",
+                            "retryable": True,
+                            "suggested_action": "Wait for provider cooldown and retry",
+                        },
                     },
                     error=(
                         "Platform rate limit exceeded for "
@@ -331,8 +486,20 @@ async def _publish_channel(
                 db.rollback()
                 channel.status = "disabled"
                 db.add(channel)
+                mark_connector_credential_error(
+                    db,
+                    tenant_id=company_id,
+                    connector_type=channel.type,
+                    message=str(exc),
+                    status="revoked",
+                )
                 db.commit()
                 duration_ms = int((perf_counter() - started_at) * 1000)
+                mapped = map_provider_error(
+                    provider=channel.type,
+                    error_code=getattr(exc, "error_code", "adapter_auth_error"),
+                    message=str(exc),
+                )
                 return ChannelPublishResult(
                     channel_id=channel.id,
                     channel_type=channel.type,
@@ -341,15 +508,23 @@ async def _publish_channel(
                     retryable=False,
                     publish_duration_ms=duration_ms,
                     metadata={
-                        "error_code": getattr(exc, "error_code", "adapter_auth_error"),
+                        "error_code": mapped.error_code,
                         "channel_auth_failed": True,
                         "channel_disabled": True,
+                        "normalized_error": mapped.__dict__,
                     },
                     error=str(exc),
                 )
             except AdapterRetryableError as exc:
                 db.rollback()
                 duration_ms = int((perf_counter() - started_at) * 1000)
+                mapped = map_provider_error(
+                    provider=channel.type,
+                    error_code=getattr(exc, "error_code", "adapter_retryable_error"),
+                    message=str(exc),
+                )
+                if connector_hardening_enabled and mapped.category == "rate_limit":
+                    set_connector_backoff(channel.id, seconds=120)
                 return ChannelPublishResult(
                     channel_id=channel.id,
                     channel_type=channel.type,
@@ -357,12 +532,25 @@ async def _publish_channel(
                     success=False,
                     retryable=attempt < policy.max_attempts,
                     publish_duration_ms=duration_ms,
-                    metadata={"error_code": getattr(exc, "error_code", "adapter_retryable_error")},
+                    metadata={"error_code": mapped.error_code, "normalized_error": mapped.__dict__},
                     error=str(exc),
                 )
             except AdapterPermanentError as exc:
                 db.rollback()
                 duration_ms = int((perf_counter() - started_at) * 1000)
+                mapped = map_provider_error(
+                    provider=channel.type,
+                    error_code=getattr(exc, "error_code", "adapter_permanent_error"),
+                    message=str(exc),
+                )
+                mark_connector_credential_error(
+                    db,
+                    tenant_id=company_id,
+                    connector_type=channel.type,
+                    message=str(exc),
+                    status=("revoked" if mapped.category == "auth" else "error"),
+                )
+                db.commit()
                 return ChannelPublishResult(
                     channel_id=channel.id,
                     channel_type=channel.type,
@@ -370,12 +558,17 @@ async def _publish_channel(
                     success=False,
                     retryable=False,
                     publish_duration_ms=duration_ms,
-                    metadata={"error_code": getattr(exc, "error_code", "adapter_permanent_error")},
+                    metadata={"error_code": mapped.error_code, "normalized_error": mapped.__dict__},
                     error=str(exc),
                 )
             except Exception as exc:
                 db.rollback()
                 duration_ms = int((perf_counter() - started_at) * 1000)
+                mapped = map_provider_error(
+                    provider=channel.type,
+                    error_code="unhandled_adapter_exception",
+                    message=str(exc),
+                )
                 return ChannelPublishResult(
                     channel_id=channel.id,
                     channel_type=channel.type,
@@ -383,7 +576,7 @@ async def _publish_channel(
                     success=False,
                     retryable=attempt < policy.max_attempts,
                     publish_duration_ms=duration_ms,
-                    metadata={"error_code": "unhandled_adapter_exception"},
+                    metadata={"error_code": mapped.error_code, "normalized_error": mapped.__dict__},
                     error=str(exc),
                 )
 
@@ -810,6 +1003,14 @@ def publish_post(self, company_id: str, post_id: str) -> dict:
                     )
 
             channels_total = len(channels)
+            if connector_hardening_enabled:
+                for result in publish_results:
+                    if not result.success:
+                        health = calculate_connector_health(db, tenant_id=company_uuid, channel_id=result.channel_id)
+                        if health.get("score", 100) < settings.connector_health_warning_threshold:
+                            set_connector_cooldown(
+                                result.channel_id, seconds=max(60, settings.connector_health_cooldown_seconds)
+                            )
             summary_metadata = {
                 "channels_total": channels_total,
                 "channels_success": success_count,
@@ -923,6 +1124,39 @@ def publish_post(self, company_id: str, post_id: str) -> dict:
                     error_message=post.last_error or "Publish failed",
                 )
                 db.commit()
+
+            if connector_hardening_enabled:
+                for result in publish_results:
+                    if not result.success:
+                        tripped = maybe_trip_connector_circuit_breaker(
+                            db,
+                            tenant_id=company_uuid,
+                            channel_id=result.channel_id,
+                            consecutive_failures_threshold=settings.connector_circuit_breaker_failures,
+                        )
+                        if tripped:
+                            emit_publish_event(
+                                db,
+                                company_id=post.company_id,
+                                project_id=post.project_id,
+                                post_id=post.id,
+                                channel_id=result.channel_id,
+                                event_type="ConnectorCircuitBreakerTripped",
+                                status="error",
+                                attempt=attempt,
+                                metadata_json={"threshold": settings.connector_circuit_breaker_failures},
+                            )
+                            log_audit_event(
+                                db,
+                                company_id=post.company_id,
+                                action="connector.disabled_auto",
+                                metadata={
+                                    "channel_id": str(result.channel_id),
+                                    "reason": "consecutive_failures",
+                                    "threshold": settings.connector_circuit_breaker_failures,
+                                },
+                            )
+                            db.commit()
 
             logger.info(
                 "publish_post_completed company_id=%s post_id=%s project_id=%s status=%s channels_success=%s channels_failed=%s",

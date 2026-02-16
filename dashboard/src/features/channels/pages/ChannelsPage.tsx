@@ -6,7 +6,14 @@ import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
 import { getCurrentBilling } from "@/shared/api/billingApi";
 import { createWebsiteChannel, listChannels, listMetaConnections } from "@/shared/api/channelsApi";
-import { getConnectorOauthStartUrl, listAvailableConnectors } from "@/shared/api/connectorsApi";
+import {
+  disconnectConnector,
+  getConnectorHealth,
+  getConnectorOauthStartUrl,
+  listAvailableConnectors,
+  refreshConnectorToken,
+  testConnectorPublish,
+} from "@/shared/api/connectorsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
 import { ConnectorAvailability } from "@/shared/api/types";
@@ -170,6 +177,48 @@ export function ChannelsPage(): JSX.Element {
   }, [metaConnectionsQuery.data]);
   const connectorLimitReached =
     (billingQuery.data?.usage.connectors_count ?? 0) >= (billingQuery.data?.plan.max_connectors ?? Number.POSITIVE_INFINITY);
+  const connectorCatalogMap = useMemo(() => {
+    const map = new Map<string, ConnectorAvailability>();
+    for (const item of connectorsQuery.data ?? []) {
+      map.set(item.platform, item);
+    }
+    return map;
+  }, [connectorsQuery.data]);
+  const connectorHealthQuery = useQuery({
+    queryKey: ["connectorHealth", tenantId, activeProjectId, channelsQuery.data?.items.map((item) => item.id).join(",")],
+    enabled: Boolean(tenantId && activeProjectId && (channelsQuery.data?.items.length ?? 0) > 0),
+    queryFn: async () => {
+      const channels = channelsQuery.data?.items ?? [];
+      const values = await Promise.all(channels.map((channel) => getConnectorHealth(channel.id)));
+      return new Map(values.map((value) => [value.channel_id, value]));
+    },
+    refetchInterval: 60000,
+  });
+  const refreshTokenMutation = useMutation({
+    mutationFn: (connectorId: string) => refreshConnectorToken(connectorId),
+    onSuccess: () => {
+      pushToast("Token refreshed", "success");
+      queryClient.invalidateQueries({ queryKey: ["connectorHealth", tenantId, activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["connectors", tenantId] });
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to refresh token"), "error"),
+  });
+  const disconnectMutation = useMutation({
+    mutationFn: (connectorId: string) => disconnectConnector(connectorId),
+    onSuccess: () => {
+      pushToast("Connector disconnected", "success");
+      queryClient.invalidateQueries({ queryKey: ["channels", tenantId, activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["connectors", tenantId] });
+      queryClient.invalidateQueries({ queryKey: ["connectorHealth", tenantId, activeProjectId] });
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to disconnect connector"), "error"),
+  });
+  const testMutation = useMutation({
+    mutationFn: ({ connectorId, scenario }: { connectorId: string; scenario: string }) =>
+      testConnectorPublish(connectorId, scenario),
+    onSuccess: () => pushToast("Sandbox scenario configured", "success"),
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to configure sandbox"), "error"),
+  });
 
   return (
     <div className="space-y-6">
@@ -327,6 +376,46 @@ export function ChannelsPage(): JSX.Element {
               <ul className="space-y-2 text-sm text-slate-700">
                 {(channelsQuery.data?.items ?? []).map((channel) => (
                   <li key={channel.id} className="rounded-md border border-slate-200 p-3">
+                    {(() => {
+                      const health = connectorHealthQuery.data?.get(channel.id);
+                      const catalog = connectorCatalogMap.get(channel.type);
+                      const tokenExpiry = catalog?.token_expires_at ? new Date(catalog.token_expires_at) : null;
+                      const expiresSoon = tokenExpiry ? tokenExpiry.getTime() - Date.now() < 1000 * 60 * 60 * 24 : false;
+                      const healthColor =
+                        health && health.score >= 80
+                          ? "bg-emerald-100 text-emerald-700"
+                          : health && health.score >= 60
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-rose-100 text-rose-700";
+                      return (
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className={`rounded px-2 py-0.5 text-xs ${healthColor}`}>
+                            Health {health ? `${health.score}%` : "n/a"}
+                          </span>
+                          {catalog?.last_publish_status ? (
+                            <span
+                              className={`rounded px-2 py-0.5 text-xs ${
+                                catalog.last_publish_status === "ok"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-rose-100 text-rose-700"
+                              }`}
+                            >
+                              Last publish: {catalog.last_publish_status}
+                            </span>
+                          ) : null}
+                          {health && health.backoff_seconds > 0 ? (
+                            <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                              Cooldown {health.backoff_seconds}s
+                            </span>
+                          ) : null}
+                          {expiresSoon ? (
+                            <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                              Token expires soon
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-semibold capitalize">{channel.name ?? channel.type}</div>
@@ -356,6 +445,40 @@ export function ChannelsPage(): JSX.Element {
                       {channel.capabilities_json?.shorts ? (
                         <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">Shorts</span>
                       ) : null}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        className="bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+                        disabled={refreshTokenMutation.isPending}
+                        onClick={() => refreshTokenMutation.mutate(channel.id)}
+                      >
+                        Refresh token
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+                        disabled={testMutation.isPending}
+                        onClick={() => testMutation.mutate({ connectorId: channel.id, scenario: "simulate_rate_limit" })}
+                      >
+                        Test rate-limit
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-rose-600 px-2 py-1 text-xs hover:bg-rose-500"
+                        disabled={disconnectMutation.isPending}
+                        onClick={() => disconnectMutation.mutate(channel.id)}
+                      >
+                        Disconnect
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300"
+                        disabled={channel.type === "website"}
+                        onClick={() => connectorMutation.mutate(channel.type)}
+                      >
+                        Reconnect
+                      </Button>
                     </div>
                   </li>
                 ))}

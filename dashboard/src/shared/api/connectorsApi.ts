@@ -1,5 +1,5 @@
 import { api } from "@/shared/api/client";
-import { ConnectorAvailability } from "@/shared/api/types";
+import { ConnectorAvailability, ConnectorHealth } from "@/shared/api/types";
 
 type ConnectorsEnvelope = {
   items: ConnectorAvailability[];
@@ -36,4 +36,31 @@ export async function getConnectorOauthStartUrl(
     },
   });
   return response.data.authorization_url;
+}
+
+export async function getConnectorHealth(connectorId: string): Promise<ConnectorHealth> {
+  const response = await api.get<ConnectorHealth>(`/connectors/${connectorId}/health`);
+  return response.data;
+}
+
+export async function refreshConnectorToken(connectorId: string): Promise<{ updated: boolean; status?: string }> {
+  const response = await api.post<{ updated: boolean; status?: string }>(`/connectors/${connectorId}/refresh-token`);
+  return response.data;
+}
+
+export async function disconnectConnector(connectorId: string): Promise<{ updated: boolean; status?: string }> {
+  const response = await api.post<{ updated: boolean; status?: string }>(`/connectors/${connectorId}/disconnect`);
+  return response.data;
+}
+
+export async function testConnectorPublish(
+  connectorId: string,
+  scenario: string
+): Promise<{ updated: boolean; scenario: string; ttl_seconds: number }> {
+  const response = await api.post<{ updated: boolean; scenario: string; ttl_seconds: number }>(
+    `/connectors/${connectorId}/test-publish`,
+    null,
+    { params: { scenario } }
+  );
+  return response.data;
 }

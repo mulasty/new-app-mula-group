@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     system_db_latency_alert_ms: int = 120
     system_worker_backlog_alert_threshold: int = 100
     tenant_risk_manual_approval_threshold: int = 70
+    connector_health_warning_threshold: int = 60
+    connector_health_cooldown_seconds: int = 600
+    connector_circuit_breaker_failures: int = 5
+    connector_refresh_retry_attempts: int = 2
+    meta_webhook_verify_token: str | None = None
+    meta_webhook_app_secret: str | None = None
+    tiktok_webhook_secret: str | None = None
+    x_webhook_secret: str | None = None
+    pinterest_webhook_secret: str | None = None
 
     linkedin_client_id: str | None = None
     linkedin_client_secret: str | None = None

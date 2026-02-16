@@ -176,6 +176,25 @@ export type ConnectorAvailability = {
   capabilities: ChannelCapabilities;
   oauth_start_path?: string;
   available: boolean;
+  credential_status?: string;
+  token_expires_at?: string | null;
+  last_error?: string | null;
+  last_publish_status?: "ok" | "error" | null;
+};
+
+export type ConnectorHealth = {
+  channel_id: string;
+  connector_type: string;
+  score: number;
+  success_ratio: number;
+  failure_ratio: number;
+  rate_limit_ratio: number;
+  token_status: string;
+  token_expires_at?: string | null;
+  last_error?: string | null;
+  cooldown_seconds: number;
+  backoff_seconds: number;
+  status?: string;
 };
 
 export type CampaignStatus = "draft" | "active" | "paused" | "archived";

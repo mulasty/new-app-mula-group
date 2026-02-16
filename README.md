@@ -798,6 +798,107 @@ Onboarding progress is shown as `0% -> 25% -> 50% -> 75% -> 100%` and persisted 
 - `v1_subscription_lifecycle_ux`
 - `v1_conversion_nudges`
 
+## V1 Finalization - Phase B (Connector Hardening)
+
+Phase B upgrades connector reliability and operational safety with additive changes only.
+
+### Migration Summary
+
+- `0016_connector_hardening_b`
+  - new table: `connector_credentials`
+  - indexes:
+    - `ix_connector_credentials_tenant_id`
+    - `ix_connector_credentials_connector_type`
+  - unique constraint:
+    - `(tenant_id, connector_type)`
+
+### New Table
+
+- `connector_credentials`
+  - `id`
+  - `tenant_id`
+  - `connector_type`
+  - `encrypted_access_token`
+  - `encrypted_refresh_token`
+  - `expires_at`
+  - `scopes`
+  - `status`
+  - `last_error`
+  - `created_at`
+  - `updated_at`
+
+### New/Extended Endpoints
+
+- `GET /connectors/available`
+  - now returns credential state + token expiry + last publish status.
+- `GET /connectors/{id}/health`
+- `POST /connectors/{id}/disconnect`
+- `POST /connectors/{id}/refresh-token`
+- `POST /connectors/{id}/test-publish?scenario=...`
+- `GET /connectors/{id}/cooldown`
+- `POST /connectors/webhooks/{provider}`
+
+### New Environment Variables (Phase B)
+
+- `CONNECTOR_HEALTH_WARNING_THRESHOLD`
+- `CONNECTOR_HEALTH_COOLDOWN_SECONDS`
+- `CONNECTOR_CIRCUIT_BREAKER_FAILURES`
+- `CONNECTOR_REFRESH_RETRY_ATTEMPTS`
+- `META_WEBHOOK_APP_SECRET`
+- `TIKTOK_WEBHOOK_SECRET`
+- `X_WEBHOOK_SECRET`
+- `PINTEREST_WEBHOOK_SECRET`
+
+### Security Considerations
+
+- tokens are stored encrypted at rest in `connector_credentials`
+- OAuth/webhook sensitive values remain backend-only (never returned to frontend)
+- webhook signature verification is enabled per provider secret
+- webhook deduplication uses Redis idempotency keys
+- hardening flows are feature-flagged:
+  - `v1_connector_hardening`
+  - `v1_connector_sandbox_mode`
+  - `v1_connector_webhooks`
+
+### Test Checklist
+
+1. Enable connector flags for tenant via `GET/PATCH /feature-flags`.
+2. Connect at least one channel and verify `GET /connectors/available`.
+3. Check connector health:
+   - `GET /connectors/{id}/health`
+4. Trigger cooldown simulation:
+   - `POST /connectors/{id}/test-publish?scenario=simulate_rate_limit`
+   - verify `GET /connectors/{id}/cooldown` shows backoff.
+5. Test disconnect:
+   - `POST /connectors/{id}/disconnect`
+   - confirm status becomes disabled.
+6. Verify smoke:
+   - `bash scripts/smoke_all.sh`
+
+### Failure Simulation Guide
+
+Use sandbox mode:
+- `simulate_success`
+- `simulate_rate_limit`
+- `simulate_auth_expired`
+- `simulate_provider_error`
+
+The worker maps failures to normalized provider error metadata:
+- `provider`
+- `error_code`
+- `category`
+- `retryable`
+- `suggested_action`
+
+### Rollback Strategy
+
+1. Disable flags:
+   - `v1_connector_hardening`
+   - `v1_connector_sandbox_mode`
+   - `v1_connector_webhooks`
+2. Redeploy previous backend image.
+3. Keep migration in place (additive schema); old code remains compatible.
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

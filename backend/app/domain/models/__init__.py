@@ -14,6 +14,7 @@ from app.domain.models.channel_publication import ChannelPublication
 from app.domain.models.channel_retry_policy import ChannelRetryPolicy
 from app.domain.models.content_item import ContentItem
 from app.domain.models.content_template import ContentTemplate
+from app.domain.models.connector_credential import ConnectorCredential
 from app.domain.models.facebook_account import FacebookAccount
 from app.domain.models.facebook_page import FacebookPage
 from app.domain.models.failed_job import FailedJob
@@ -46,6 +47,7 @@ __all__ = [
     "AutomationRule",
     "ContentTemplate",
     "ContentItem",
+    "ConnectorCredential",
     "FailedJob",
     "RevokedToken",
     "Approval",
