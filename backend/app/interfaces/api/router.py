@@ -15,6 +15,7 @@ from app.interfaces.api.posts import router as posts_router
 from app.interfaces.api.projects import router as projects_router
 from app.interfaces.api.signup import router as signup_router
 from app.interfaces.api.stripe_webhooks import router as stripe_webhooks_router
+from app.interfaces.api.system_ops import router as system_ops_router
 from app.interfaces.api.tenant import router as tenant_router
 from app.interfaces.api.website_publications import router as website_publications_router
 
@@ -35,4 +36,5 @@ api_router.include_router(analytics_router)
 api_router.include_router(automation_router)
 api_router.include_router(ai_quality_router)
 api_router.include_router(admin_router)
+api_router.include_router(system_ops_router)
 api_router.include_router(website_publications_router)

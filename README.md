@@ -696,6 +696,57 @@ Integration:
 - `PLATFORM_ADMIN_EMAILS`
 - `VITE_PLATFORM_ADMIN_EMAILS`
 
+## Phase 8 - Platform Operating System
+
+Phase 8 adds a platform-level control plane for system intelligence, self-healing, tenant risk controls, revenue awareness, and operational guardrails.
+
+### New Migration
+
+- `0014_phase8_ops_core`
+  - `system_health`
+  - `tenant_risk_scores`
+  - `revenue_metrics`
+  - `platform_incidents`
+  - `performance_baselines`
+
+### New Endpoints
+
+- System intelligence:
+  - `GET /system/health-score`
+  - `POST /system/performance/dashboard-load`
+- Risk / revenue:
+  - `GET /tenants/{id}/risk-score`
+  - `GET /metrics/revenue-overview` (platform-admin)
+- Admin super-control:
+  - `GET /admin/system/overview`
+  - `GET /admin/incidents`
+  - `POST /admin/incidents/{id}/resolve`
+  - `POST /admin/system/global-publish-breaker`
+  - `POST /admin/system/tenants/{id}/publish-breaker`
+  - `POST /admin/system/maintenance-mode`
+  - `POST /admin/feature-flags/override`
+
+### Auto-Recovery Runtime
+
+Beat schedules now include:
+- `workers.tasks.platform_health_intelligence`
+- `workers.tasks.refresh_tenant_risk_scores`
+- `workers.tasks.refresh_revenue_intelligence`
+- `workers.tasks.performance_baseline_snapshot`
+
+Auto-recovery behaviors (feature-flagged):
+- missing worker heartbeat -> platform incident
+- repeated channel failures -> connector auto-disable
+- high tenant risk/error rate -> temporary tenant throttle + optional tenant publish breaker
+- high global publish failures -> optional global publish circuit breaker
+
+### New Environment Variables (Phase 8)
+
+- `SYSTEM_PUBLISH_FAILURE_ALERT_THRESHOLD` (default `0.05`)
+- `SYSTEM_DB_LATENCY_ALERT_MS` (default `120`)
+- `SYSTEM_WORKER_BACKLOG_ALERT_THRESHOLD` (default `100`)
+- `TENANT_RISK_MANUAL_APPROVAL_THRESHOLD` (default `70`)
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

@@ -56,6 +56,26 @@ celery_app.conf.update(
             "schedule": schedule(86400.0),
             "options": {"queue": "scheduler"},
         },
+        "platform-health-intelligence-every-60s": {
+            "task": "workers.tasks.platform_health_intelligence",
+            "schedule": schedule(60.0),
+            "options": {"queue": "scheduler"},
+        },
+        "platform-refresh-risk-scores-every-300s": {
+            "task": "workers.tasks.refresh_tenant_risk_scores",
+            "schedule": schedule(300.0),
+            "options": {"queue": "scheduler"},
+        },
+        "platform-revenue-intelligence-every-900s": {
+            "task": "workers.tasks.refresh_revenue_intelligence",
+            "schedule": schedule(900.0),
+            "options": {"queue": "analytics"},
+        },
+        "platform-performance-baseline-every-600s": {
+            "task": "workers.tasks.performance_baseline_snapshot",
+            "schedule": schedule(600.0),
+            "options": {"queue": "analytics"},
+        },
     },
 )
 

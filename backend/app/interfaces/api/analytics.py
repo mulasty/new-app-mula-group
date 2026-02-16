@@ -1,4 +1,5 @@
 from uuid import UUID
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.application.services.analytics_service import (
     get_publishing_timeseries,
     parse_time_range_days,
 )
+from app.application.services.platform_ops_service import append_perf_sample
 from app.domain.models.user import User
 from app.infrastructure.cache.redis_client import get_redis_client
 from app.infrastructure.db.async_session import get_async_db
@@ -24,13 +26,16 @@ async def publishing_summary(
     tenant_id: UUID = Depends(require_tenant_id),
     _current_user: User = Depends(get_current_user),
 ) -> dict:
+    started = perf_counter()
     redis_client = get_redis_client()
-    return await get_publishing_summary(
+    result = await get_publishing_summary(
         db,
         redis_client,
         company_id=tenant_id,
         project_id=project_id,
     )
+    append_perf_sample("analytics_query_duration_ms", (perf_counter() - started) * 1000.0)
+    return result
 
 
 @router.get("/publishing-timeseries", status_code=status.HTTP_200_OK)
@@ -41,19 +46,22 @@ async def publishing_timeseries(
     tenant_id: UUID = Depends(require_tenant_id),
     _current_user: User = Depends(get_current_user),
 ) -> list[dict]:
+    started = perf_counter()
     try:
         range_days = parse_time_range_days(range)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     redis_client = get_redis_client()
-    return await get_publishing_timeseries(
+    result = await get_publishing_timeseries(
         db,
         redis_client,
         company_id=tenant_id,
         range_days=range_days,
         project_id=project_id,
     )
+    append_perf_sample("analytics_query_duration_ms", (perf_counter() - started) * 1000.0)
+    return result
 
 
 @router.get("/activity-stream", status_code=status.HTTP_200_OK)
@@ -64,11 +72,14 @@ async def activity_stream(
     tenant_id: UUID = Depends(require_tenant_id),
     _current_user: User = Depends(get_current_user),
 ) -> list[dict]:
+    started = perf_counter()
     redis_client = get_redis_client()
-    return await get_activity_stream(
+    result = await get_activity_stream(
         db,
         redis_client,
         company_id=tenant_id,
         project_id=project_id,
         limit=limit,
     )
+    append_perf_sample("analytics_query_duration_ms", (perf_counter() - started) * 1000.0)
+    return result

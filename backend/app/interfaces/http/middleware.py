@@ -17,6 +17,12 @@ from app.infrastructure.logging.context import (
     set_tenant_id,
 )
 from app.infrastructure.observability.metrics import measure_redis, record_request
+from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.platform_ops_service import (
+    append_perf_sample,
+    is_global_publish_paused,
+    is_tenant_publish_paused,
+)
 from app.application.services.billing_service import (
     PLAN_LIMIT_ERROR,
     enforce_connector_limit,
@@ -69,6 +75,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             duration_seconds = perf_counter() - started_at
+            append_perf_sample("request_latency_ms", duration_seconds * 1000.0)
             record_request(
                 method=request.method,
                 path=request.url.path,
@@ -163,6 +170,9 @@ class TenantRateLimitMiddleware(BaseHTTPMiddleware):
                 sliding_count = float(current_count) + (previous_count * previous_weight)
 
                 if sliding_count > self.requests_per_minute:
+                    violation_key = f"tenant:rate_limit_violations:{tenant_header}"
+                    self.redis.incrby(violation_key, 1)
+                    self.redis.expire(violation_key, 7 * 24 * 3600)
                     trace_id = getattr(request.state, "request_id", None) or str(uuid4())
                     return JSONResponse(
                         status_code=429,
@@ -172,7 +182,75 @@ class TenantRateLimitMiddleware(BaseHTTPMiddleware):
                             "trace_id": trace_id,
                         },
                     )
+                throttle_key = f"tenant:throttle:{tenant_header}"
+                if str(self.redis.get(throttle_key) or "0") == "1":
+                    trace_id = getattr(request.state, "request_id", None) or str(uuid4())
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "error_code": "tenant_temporarily_throttled",
+                            "message": "Tenant is temporarily throttled due to elevated error rates",
+                            "trace_id": trace_id,
+                        },
+                    )
             except Exception:
                 logger.exception("tenant_rate_limit_middleware_error")
 
+        return await call_next(request)
+
+
+class PlatformGuardrailsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        method = request.method.upper()
+        path = request.url.path
+
+        # Emergency maintenance mode: read-only except health/metrics/auth and admin controls.
+        try:
+            with SessionLocal() as db:
+                maintenance_on = is_feature_enabled(db, key="maintenance_read_only_mode", tenant_id=None)
+        except Exception:
+            maintenance_on = False
+
+        if maintenance_on and method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if not (path.startswith("/health") or path.startswith("/ready") or path.startswith("/metrics") or path.startswith("/auth") or path.startswith("/admin")):
+                trace_id = getattr(request.state, "request_id", None) or str(uuid4())
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error_code": "maintenance_read_only_mode",
+                        "message": "Platform is in maintenance mode (read-only)",
+                        "trace_id": trace_id,
+                    },
+                )
+
+        is_publish_path = path.endswith("/schedule") or path.endswith("/publish-now")
+        if is_publish_path and method == "POST":
+            paused_global, reason_global = is_global_publish_paused()
+            if paused_global:
+                trace_id = getattr(request.state, "request_id", None) or str(uuid4())
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error_code": "global_publish_paused",
+                        "message": reason_global or "Publishing is temporarily paused globally",
+                        "trace_id": trace_id,
+                    },
+                )
+            tenant_header = request.headers.get("X-Tenant-ID")
+            if tenant_header:
+                try:
+                    tenant_id = UUID(tenant_header)
+                    paused_tenant, reason_tenant = is_tenant_publish_paused(tenant_id)
+                    if paused_tenant:
+                        trace_id = getattr(request.state, "request_id", None) or str(uuid4())
+                        return JSONResponse(
+                            status_code=429,
+                            content={
+                                "error_code": "tenant_publish_paused",
+                                "message": reason_tenant or "Publishing is temporarily paused for tenant",
+                                "trace_id": trace_id,
+                            },
+                        )
+                except ValueError:
+                    pass
         return await call_next(request)

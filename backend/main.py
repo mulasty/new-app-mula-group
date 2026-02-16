@@ -14,6 +14,7 @@ from app.interfaces.api.router import api_router
 from app.interfaces.http.middleware import (
     MetricsMiddleware,
     PlanEnforcementMiddleware,
+    PlatformGuardrailsMiddleware,
     RequestIDMiddleware,
     SecurityHeadersMiddleware,
     TenantContextMiddleware,
@@ -38,6 +39,7 @@ app.add_middleware(
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantContextMiddleware)
+app.add_middleware(PlatformGuardrailsMiddleware)
 app.add_middleware(PlanEnforcementMiddleware)
 app.add_middleware(TenantRateLimitMiddleware, requests_per_minute=settings.tenant_rate_limit_per_minute)
 app.add_middleware(RequestIDMiddleware)

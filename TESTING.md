@@ -71,6 +71,20 @@ cd backend
 pytest -q tests/test_phase7_flags_admin_ai.py
 ```
 
+## Phase 8 Smoke (Platform OS)
+
+After login with tenant headers:
+
+1. `GET /system/health-score`
+2. `GET /tenants/<tenant_id>/risk-score`
+3. as platform-admin:
+   - `GET /admin/system/overview`
+   - `GET /admin/incidents`
+4. Trigger breaker manually:
+   - `POST /admin/system/global-publish-breaker` with `{ "enabled": true, "reason": "test" }`
+   - verify `/posts/{id}/publish-now` returns guardrail response
+   - disable breaker with `{ "enabled": false, "reason": "rollback" }`
+
 ## Publishing Flow Smoke (Phase-4)
 
 ```bash

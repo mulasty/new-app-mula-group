@@ -14,6 +14,12 @@ FLAG_KEYS = [
     ("beta_public_pricing", "Public pricing and checkout flow"),
     ("beta_admin_panel", "Operator dashboard and support tools"),
     ("beta_ai_quality", "AI quality and safety enforcement"),
+    ("auto_disable_connector_on_repeated_failures", "Auto-recovery disables unstable connectors"),
+    ("auto_throttle_tenant_on_high_error_rate", "Auto-recovery throttles tenants with high error rates"),
+    ("enable_global_publish_circuit_breaker", "Global publish pause during incidents"),
+    ("enable_tenant_publish_circuit_breaker", "Tenant-level publish pause during incidents"),
+    ("maintenance_read_only_mode", "Global read-only maintenance mode"),
+    ("enforce_tenant_risk_controls", "Require manual approval when tenant risk is high"),
 ]
 
 
@@ -89,4 +95,3 @@ def is_feature_enabled(db: Session, *, key: str, tenant_id: UUID | None) -> bool
         if flag["key"] == key:
             return bool(flag["effective_enabled"])
     return False
-

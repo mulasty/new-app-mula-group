@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/app/providers/AuthProvider";
 import { useFeatureFlags } from "@/app/providers/FeatureFlagsProvider";
 import { useTenant } from "@/app/providers/TenantProvider";
+import { api } from "@/shared/api/client";
 import { Button } from "@/shared/components/ui/Button";
 import { Input } from "@/shared/components/ui/Input";
 import { Modal } from "@/shared/components/ui/Modal";
@@ -50,6 +51,16 @@ export function AppShell(): JSX.Element {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (!tenantId) {
+      return;
+    }
+    const loadTime = performance.now();
+    void api.post("/system/performance/dashboard-load", { load_time_ms: loadTime }).catch(() => {
+      // Non-critical telemetry endpoint.
+    });
+  }, [tenantId, location.pathname]);
 
   const tenantShort = useMemo(() => (tenantId ? `${tenantId.slice(0, 8)}...` : "Not set"), [tenantId]);
   const isPlatformAdmin = useMemo(() => {

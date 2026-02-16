@@ -12,6 +12,8 @@ from app.domain.models.project import Project
 from app.domain.models.user import User, UserRole
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import enforce_connector_limit
+from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.platform_ops_service import TENANT_RISK_THRESHOLD, calculate_tenant_risk_score
 from app.integrations.channel_adapters import get_adapter_capabilities
 from app.interfaces.api.deps import get_current_user, require_roles, require_tenant_id
 from app.interfaces.api.linkedin_oauth import (
@@ -95,6 +97,17 @@ def _serialize_channel(channel: Channel) -> dict:
     }
 
 
+def _enforce_connector_risk_controls(db: Session, *, tenant_id: UUID) -> None:
+    if not is_feature_enabled(db, key="enforce_tenant_risk_controls", tenant_id=tenant_id):
+        return
+    risk = calculate_tenant_risk_score(db, company_id=tenant_id)
+    if risk["risk_score"] >= TENANT_RISK_THRESHOLD:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Tenant risk threshold exceeded; connector changes are temporarily restricted",
+        )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_channel(
     payload: ChannelCreateRequest,
@@ -103,6 +116,7 @@ def create_channel(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     if payload.type != ChannelType.WEBSITE.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only website channel is supported")
@@ -188,6 +202,7 @@ def linkedin_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_linkedin(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_linkedin_oauth_authorization_url(
@@ -278,6 +293,7 @@ def meta_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_meta_oauth_authorization_url(
@@ -376,6 +392,7 @@ def tiktok_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_tiktok_oauth_authorization_url(
@@ -479,6 +496,7 @@ def threads_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_threads_oauth_authorization_url(
@@ -582,6 +600,7 @@ def x_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_x_oauth_authorization_url(
@@ -682,6 +701,7 @@ def pinterest_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    _enforce_connector_risk_controls(db, tenant_id=tenant_id)
     enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_pinterest_oauth_authorization_url(

@@ -18,10 +18,13 @@ from app.domain.models.facebook_page import FacebookPage
 from app.domain.models.failed_job import FailedJob
 from app.domain.models.instagram_account import InstagramAccount
 from app.domain.models.linkedin_account import LinkedInAccount
+from app.domain.models.performance_baseline import PerformanceBaseline
+from app.domain.models.platform_incident import PlatformIncident
 from app.domain.models.platform_rate_limit import PlatformRateLimit
 from app.domain.models.post import Post
 from app.domain.models.publish_event import PublishEvent
 from app.domain.models.project import Project
+from app.domain.models.revenue_metric import RevenueMetric
 from app.domain.models.social_account import SocialAccount
 from app.domain.models.subscription import Subscription
 from app.domain.models.subscription_plan import SubscriptionPlan
@@ -29,6 +32,8 @@ from app.domain.models.revoked_token import RevokedToken
 from app.domain.models.feature_flag import FeatureFlag
 from app.domain.models.webhook_event import WebhookEvent
 from app.domain.models.user import User
+from app.domain.models.system_health import SystemHealth
+from app.domain.models.tenant_risk_score import TenantRiskScore
 from app.domain.models.website_publication import WebsitePublication
 
 __all__ = [
@@ -54,12 +59,17 @@ __all__ = [
     "FacebookPage",
     "InstagramAccount",
     "LinkedInAccount",
+    "PerformanceBaseline",
+    "PlatformIncident",
     "PlatformRateLimit",
+    "RevenueMetric",
     "SocialAccount",
     "CompanySubscription",
     "CompanyUsage",
     "SubscriptionPlan",
     "FeatureFlag",
+    "SystemHealth",
+    "TenantRiskScore",
     "WebhookEvent",
     "Post",
     "PublishEvent",

@@ -342,3 +342,38 @@ export type AdminAuditLogItem = {
   metadata_json: Record<string, unknown>;
   created_at: string;
 };
+
+export type PlatformIncidentItem = {
+  id: string;
+  company_id?: string | null;
+  incident_type: string;
+  severity: string;
+  status: string;
+  message: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  resolved_at?: string | null;
+};
+
+export type AdminSystemOverview = {
+  system_health_score: number;
+  components: Array<{
+    component: string;
+    status: string;
+    latency_ms: number;
+    error_rate: number;
+    updated_at: string;
+  }>;
+  worker_queue_depth: number;
+  tenant_risk_ranking: Array<{
+    company_id: string;
+    risk_score: number;
+    risk_level: string;
+  }>;
+  revenue: {
+    tenant_count: number;
+    total_mrr: number;
+    avg_churn_risk_score: number;
+  };
+  active_incidents: PlatformIncidentItem[];
+};

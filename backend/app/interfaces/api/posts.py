@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.application.services.publishing_service import emit_publish_event, publish_post_async
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import enforce_post_limit, increment_post_usage
+from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.platform_ops_service import TENANT_RISK_THRESHOLD, calculate_tenant_risk_score
 from app.domain.models.post import Post, PostStatus
 from app.domain.models.project import Project
 from app.domain.models.publish_event import PublishEvent
@@ -37,6 +39,17 @@ class PostUpdateRequest(BaseModel):
 
 class SchedulePostRequest(BaseModel):
     publish_at: datetime
+
+
+def _enforce_tenant_risk_controls(db: Session, *, tenant_id: UUID) -> None:
+    if not is_feature_enabled(db, key="enforce_tenant_risk_controls", tenant_id=tenant_id):
+        return
+    risk = calculate_tenant_risk_score(db, company_id=tenant_id)
+    if risk["risk_score"] >= TENANT_RISK_THRESHOLD:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Tenant risk threshold exceeded; manual approval is required for publishing",
+        )
 
 
 def _serialize_post(post: Post) -> dict:
@@ -149,6 +162,7 @@ def schedule_post(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    _enforce_tenant_risk_controls(db, tenant_id=tenant_id)
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
@@ -189,6 +203,7 @@ def publish_now(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    _enforce_tenant_risk_controls(db, tenant_id=tenant_id)
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")

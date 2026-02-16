@@ -6,7 +6,7 @@ from time import perf_counter
 from uuid import UUID, uuid4
 
 from celery.exceptions import MaxRetriesExceededError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.application.services.publishing_service import emit_publish_event, get_active_channels, publish_post_async
 from app.application.services.automation_service import (
@@ -17,12 +17,23 @@ from app.application.services.automation_service import (
 )
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import reset_monthly_post_usage as reset_monthly_post_usage_service
+from app.application.services.platform_ops_service import (
+    append_perf_sample,
+    calculate_revenue_overview,
+    calculate_system_health_score,
+    calculate_tenant_risk_score,
+    collect_and_store_performance_baselines,
+    create_incident,
+    evaluate_platform_guardrails,
+    execute_auto_recovery,
+)
 from app.domain.models.automation_run import AutomationRun, AutomationRunStatus
 from app.domain.models.channel import Channel
 from app.domain.models.channel_publication import ChannelPublication
 from app.domain.models.channel_retry_policy import ChannelRetryPolicy, RetryBackoffStrategy
 from app.domain.models.failed_job import FailedJob
 from app.domain.models.post import Post, PostStatus
+from app.domain.models.performance_baseline import PerformanceBaseline
 from app.domain.models.publish_event import PublishEvent
 from app.core.config import settings
 from app.integrations.channel_adapters import (
@@ -434,6 +445,7 @@ def reset_monthly_post_usage() -> dict:
 
 @celery_app.task(name="workers.tasks.schedule_due_posts")
 def schedule_due_posts() -> dict:
+    started_at = perf_counter()
     now = datetime.now(UTC)
     enqueued = 0
 
@@ -470,7 +482,67 @@ def schedule_due_posts() -> dict:
         db.commit()
 
     logger.info("scheduler_run completed enqueued=%s due_checked_at=%s", enqueued, now.isoformat())
+    append_perf_sample("scheduler_scan_duration_ms", (perf_counter() - started_at) * 1000.0)
     return {"enqueued": enqueued}
+
+
+@celery_app.task(name="workers.tasks.platform_health_intelligence")
+def platform_health_intelligence() -> dict:
+    with SessionLocal() as db:
+        health = calculate_system_health_score(db)
+        auto_recovery = execute_auto_recovery(db)
+        guardrail_actions = evaluate_platform_guardrails(db, health=health)
+        db.commit()
+    logger.info(
+        "platform_health_intelligence score=%s actions=%s guardrails=%s",
+        health.score,
+        len(auto_recovery["actions"]),
+        len(guardrail_actions["actions"]),
+    )
+    return {
+        "score": health.score,
+        "auto_recovery_actions": auto_recovery["actions"],
+        "guardrail_actions": guardrail_actions["actions"],
+    }
+
+
+@celery_app.task(name="workers.tasks.refresh_tenant_risk_scores")
+def refresh_tenant_risk_scores() -> dict:
+    with SessionLocal() as db:
+        tenant_ids = [company_id for (company_id,) in db.execute(select(Post.company_id).distinct()).all()]
+        refreshed = 0
+        for tenant_id in tenant_ids:
+            calculate_tenant_risk_score(db, company_id=tenant_id)
+            refreshed += 1
+        db.commit()
+    return {"refreshed": refreshed}
+
+
+@celery_app.task(name="workers.tasks.refresh_revenue_intelligence")
+def refresh_revenue_intelligence() -> dict:
+    with SessionLocal() as db:
+        overview = calculate_revenue_overview(db)
+        db.commit()
+    return {"tenant_count": overview["summary"]["tenant_count"], "total_mrr": overview["summary"]["total_mrr"]}
+
+
+@celery_app.task(name="workers.tasks.performance_baseline_snapshot")
+def performance_baseline_snapshot() -> dict:
+    with SessionLocal() as db:
+        collect_and_store_performance_baselines(db)
+        regressions = db.execute(
+            select(func.count(PerformanceBaseline.id)).where(PerformanceBaseline.regression_detected.is_(True))
+        ).scalar_one_or_none()
+        if int(regressions or 0) > 0:
+            create_incident(
+                db,
+                incident_type="performance_regression_detected",
+                severity="warning",
+                message="Performance baseline regression detected",
+                metadata_json={"regressions": int(regressions or 0)},
+            )
+        db.commit()
+    return {"regressions": int(regressions or 0)}
 
 
 @celery_app.task(name="workers.tasks.schedule_due_automation_rules")

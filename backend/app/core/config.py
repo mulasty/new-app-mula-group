@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     stripe_price_id_enterprise: str | None = None
     feature_flag_cache_ttl_seconds: int = 60
     platform_admin_emails: str = ""
+    system_publish_failure_alert_threshold: float = 0.05
+    system_db_latency_alert_ms: int = 120
+    system_worker_backlog_alert_threshold: int = 100
+    tenant_risk_manual_approval_threshold: int = 70
 
     linkedin_client_id: str | None = None
     linkedin_client_secret: str | None = None
