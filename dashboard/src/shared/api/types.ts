@@ -104,7 +104,29 @@ export type MetaConnectionsResponse = {
   instagram_accounts: MetaConnectionInstagramAccount[];
 };
 
-export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "published_partial" | "failed";
+export type PostStatus =
+  | "draft"
+  | "needs_approval"
+  | "scheduled"
+  | "publishing"
+  | "published"
+  | "published_partial"
+  | "failed";
+
+export type PostQualityIssue = {
+  code: string;
+  message: string;
+  severity: "info" | "warn" | "block";
+  suggestion: string;
+};
+
+export type PostQualityReport = {
+  score: number;
+  risk_level: "low" | "medium" | "high";
+  issues: PostQualityIssue[];
+  recommendations: string[];
+  created_at: string;
+};
 
 export type PostItem = {
   id: string;
@@ -116,8 +138,26 @@ export type PostItem = {
   publish_at?: string | null;
   scheduled_at?: string | null;
   last_error?: string | null;
+  quality_report?: PostQualityReport | null;
   created_at?: string;
   updated_at?: string;
+};
+
+export type BrandProfile = {
+  id: string;
+  tenant_id: string;
+  project_id?: string | null;
+  brand_name: string;
+  language: string;
+  tone: string;
+  target_audience?: string | null;
+  do_list: string[];
+  dont_list: string[];
+  forbidden_claims: string[];
+  preferred_hashtags: string[];
+  compliance_notes?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type PublishEvent = {

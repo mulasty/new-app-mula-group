@@ -7,6 +7,7 @@ import {
   CreateResult,
   ListResult,
   PostItem,
+  PostQualityReport,
   PostStatus,
   PublishEvent,
 } from "@/shared/api/types";
@@ -288,4 +289,40 @@ export async function getTimeline(postId: string, tenantId: string): Promise<Tim
     }
     throw error;
   }
+}
+
+export async function runPostQualityCheck(
+  postId: string,
+  _tenantId: string,
+  payload?: { brand_profile_id?: string; recent_posts_window?: number }
+): Promise<{
+  post_id: string;
+  score: number;
+  risk_level: "low" | "medium" | "high";
+  issues: Array<{ code: string; message: string; severity: "info" | "warn" | "block"; suggestion: string }>;
+  recommendations: string[];
+  status: PostStatus;
+  created_at: string;
+}> {
+  const response = await api.post(`/posts/${postId}/quality-check`, payload ?? {});
+  return response.data;
+}
+
+export async function getPostQualityReport(postId: string, _tenantId: string): Promise<{ post_id: string; report: PostQualityReport | null }> {
+  const response = await api.get<{ post_id: string; report: PostQualityReport | null }>(`/posts/${postId}/quality-report`);
+  return response.data;
+}
+
+export async function approvePost(postId: string, _tenantId: string): Promise<CreateResult<PostItem>> {
+  const response = await api.post<PostItem>(`/posts/${postId}/approve`);
+  return { item: normalizePost(response.data), source: "api", backendMissing: false };
+}
+
+export async function rejectPost(
+  postId: string,
+  reason: string,
+  _tenantId: string
+): Promise<CreateResult<PostItem>> {
+  const response = await api.post<PostItem>(`/posts/${postId}/reject`, { reason });
+  return { item: normalizePost(response.data), source: "api", backendMissing: false };
 }

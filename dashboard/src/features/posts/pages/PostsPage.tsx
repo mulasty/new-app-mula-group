@@ -13,16 +13,22 @@ import { usePublishingWatcher } from "@/features/posts/hooks/usePublishingWatche
 import { getCurrentBilling } from "@/shared/api/billingApi";
 import { listWebsitePublications } from "@/shared/api/websitePublicationsApi";
 import {
+  approvePost,
   createPost,
+  getPostQualityReport,
   getTimeline,
   listPosts,
   publishNow,
+  rejectPost,
+  runPostQualityCheck,
   schedulePost,
   updatePost,
 } from "@/shared/api/postsApi";
 import { listChannels, updateChannelStatus } from "@/shared/api/channelsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
+import { me } from "@/shared/api/authApi";
+import { listBrandProfiles } from "@/shared/api/brandProfilesApi";
 import { ListResult, PostItem, PostStatus } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
@@ -58,6 +64,9 @@ export function PostsPage(): JSX.Element {
   const [timelineTarget, setTimelineTarget] = useState<PostItem | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: "cancel" | "retry"; post: PostItem } | null>(null);
   const [updatingChannelId, setUpdatingChannelId] = useState<string | null>(null);
+  const [qualityTarget, setQualityTarget] = useState<PostItem | null>(null);
+  const [selectedBrandProfileId, setSelectedBrandProfileId] = useState<string>("");
+  const [rejectReason, setRejectReason] = useState("");
 
   useEffect(() => {
     if (!tenantId) {
@@ -70,6 +79,16 @@ export function PostsPage(): JSX.Element {
   const projectsQuery = useQuery({
     queryKey: ["projects", tenantId],
     queryFn: () => listProjects(tenantId),
+    enabled: Boolean(tenantId),
+  });
+  const meQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: me,
+    enabled: Boolean(tenantId),
+  });
+  const brandProfilesQuery = useQuery({
+    queryKey: ["brandProfiles", tenantId, activeProjectId || "default"],
+    queryFn: () => listBrandProfiles(activeProjectId || undefined),
     enabled: Boolean(tenantId),
   });
 
@@ -100,6 +119,11 @@ export function PostsPage(): JSX.Element {
     queryKey: ["postTimeline", tenantId, timelineTarget?.id],
     queryFn: () => getTimeline(timelineTarget!.id, tenantId),
     enabled: Boolean(tenantId && timelineTarget?.id),
+  });
+  const qualityReportQuery = useQuery({
+    queryKey: ["postQualityReport", tenantId, qualityTarget?.id],
+    queryFn: () => getPostQualityReport(qualityTarget!.id, tenantId),
+    enabled: Boolean(tenantId && qualityTarget?.id),
   });
 
   const postsQueryKey = useMemo(
@@ -258,6 +282,41 @@ export function PostsPage(): JSX.Element {
       invalidatePostQueries();
       pushToast(getApiErrorMessage(error, "Failed to retry post"), "error");
     },
+  });
+  const qualityCheckMutation = useMutation({
+    mutationFn: (postId: string) =>
+      runPostQualityCheck(postId, tenantId, {
+        brand_profile_id: selectedBrandProfileId || undefined,
+      }),
+    onSuccess: (result) => {
+      invalidatePostQueries(result.post_id);
+      if (qualityTarget?.id === result.post_id) {
+        queryClient.invalidateQueries({ queryKey: ["postQualityReport", tenantId, result.post_id] });
+      }
+      pushToast(`Quality score: ${result.score}`, result.risk_level === "high" ? "error" : "success");
+    },
+    onError: (error) => {
+      pushToast(getApiErrorMessage(error, "Failed to run quality check"), "error");
+    },
+  });
+  const approveMutation = useMutation({
+    mutationFn: (postId: string) => approvePost(postId, tenantId),
+    onSuccess: (updated) => {
+      optimisticPatchPost(updated.item.id, updated.item);
+      invalidatePostQueries(updated.item.id);
+      pushToast("Post approved", "success");
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to approve post"), "error"),
+  });
+  const rejectMutation = useMutation({
+    mutationFn: ({ postId, reason }: { postId: string; reason: string }) => rejectPost(postId, reason, tenantId),
+    onSuccess: (updated) => {
+      optimisticPatchPost(updated.item.id, updated.item);
+      invalidatePostQueries(updated.item.id);
+      setRejectReason("");
+      pushToast("Post rejected", "success");
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to reject post"), "error"),
   });
 
   const channelStatusMutation = useMutation({
@@ -477,7 +536,16 @@ export function PostsPage(): JSX.Element {
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {(
-                      ["all", "draft", "scheduled", "publishing", "published", "published_partial", "failed"] as StatusFilter[]
+                      [
+                        "all",
+                        "draft",
+                        "needs_approval",
+                        "scheduled",
+                        "publishing",
+                        "published",
+                        "published_partial",
+                        "failed",
+                      ] as StatusFilter[]
                     ).map(
                       (value) => (
                         <Button
@@ -513,6 +581,18 @@ export function PostsPage(): JSX.Element {
                     >
                       <option value="desc">Newest first</option>
                       <option value="asc">Oldest first</option>
+                    </select>
+                    <select
+                      value={selectedBrandProfileId}
+                      onChange={(event) => setSelectedBrandProfileId(event.target.value)}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Auto brand profile (default)</option>
+                      {(brandProfilesQuery.data ?? []).map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.project_id ? "[Project]" : "[Tenant]"} {profile.brand_name} ({profile.tone})
+                        </option>
+                      ))}
                     </select>
                     <Button
                       type="button"
@@ -557,10 +637,16 @@ export function PostsPage(): JSX.Element {
                       {visibleRows.map((row) => {
                         const isPublishing = row.status === "publishing";
                         const canEdit = row.status === "draft";
+                        const qualityBlocked =
+                          row.status === "needs_approval" || row.quality_report?.risk_level === "high";
                         const canSchedule =
-                          hasTextPublishingSupport && (row.status === "draft" || row.status === "scheduled");
+                          hasTextPublishingSupport &&
+                          !qualityBlocked &&
+                          (row.status === "draft" || row.status === "scheduled");
                         const canPublishNow =
-                          hasTextPublishingSupport && (row.status === "draft" || row.status === "scheduled");
+                          hasTextPublishingSupport &&
+                          !qualityBlocked &&
+                          (row.status === "draft" || row.status === "scheduled");
                         return (
                           <tr key={row.id} className="border-t border-slate-200 align-top">
                             <td className="py-2">
@@ -571,8 +657,31 @@ export function PostsPage(): JSX.Element {
                               <div className="flex items-center gap-2">
                                 {isPublishing ? <Spinner className="h-3.5 w-3.5" /> : null}
                                 <StatusChip status={row.status} />
+                                {row.quality_report ? (
+                                  <>
+                                    <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                                      Q {row.quality_report.score}
+                                    </span>
+                                    <span
+                                      className={`rounded px-2 py-0.5 text-xs ${
+                                        row.quality_report.risk_level === "high"
+                                          ? "bg-rose-100 text-rose-700"
+                                          : row.quality_report.risk_level === "medium"
+                                            ? "bg-amber-100 text-amber-700"
+                                            : "bg-emerald-100 text-emerald-700"
+                                      }`}
+                                    >
+                                      {row.quality_report.risk_level}
+                                    </span>
+                                  </>
+                                ) : null}
                               </div>
                               {row.status === "failed" ? <ErrorBadge message={row.last_error} /> : null}
+                              {row.status === "needs_approval" ? (
+                                <div className="mt-1 text-xs text-orange-700">
+                                  Publish blocked until approved by Owner/Admin.
+                                </div>
+                              ) : null}
                             </td>
                             <td className="py-2 text-slate-600">
                               {row.publish_at ? new Date(row.publish_at).toLocaleString() : "-"}
@@ -633,6 +742,47 @@ export function PostsPage(): JSX.Element {
                                 >
                                   Timeline
                                 </Button>
+                                <Button
+                                  type="button"
+                                  className="bg-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-300"
+                                  disabled={qualityCheckMutation.isPending}
+                                  onClick={() => qualityCheckMutation.mutate(row.id)}
+                                >
+                                  Quality check
+                                </Button>
+                                <Button
+                                  type="button"
+                                  className="bg-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-300"
+                                  onClick={() => setQualityTarget(row)}
+                                >
+                                  Quality report
+                                </Button>
+                                {row.status === "needs_approval" &&
+                                (meQuery.data?.role === "Owner" || meQuery.data?.role === "Admin") ? (
+                                  <>
+                                    <Button
+                                      type="button"
+                                      className="bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500"
+                                      disabled={approveMutation.isPending}
+                                      onClick={() => approveMutation.mutate(row.id)}
+                                    >
+                                      Approve
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      className="bg-rose-600 px-3 py-1 text-xs hover:bg-rose-500"
+                                      disabled={rejectMutation.isPending}
+                                      onClick={() => {
+                                        setQualityTarget(row);
+                                        if (!rejectReason) {
+                                          setRejectReason("Requires copy/content fixes");
+                                        }
+                                      }}
+                                    >
+                                      Reject
+                                    </Button>
+                                  </>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
@@ -754,6 +904,116 @@ export function PostsPage(): JSX.Element {
             }
             onClose={() => setTimelineTarget(null)}
           />
+
+          <Modal
+            open={Boolean(qualityTarget)}
+            title={qualityTarget ? `Quality report: ${qualityTarget.title}` : "Quality report"}
+            onClose={() => {
+              setQualityTarget(null);
+              setRejectReason("");
+            }}
+            footer={
+              <>
+                <Button
+                  type="button"
+                  className="bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  onClick={() => {
+                    setQualityTarget(null);
+                    setRejectReason("");
+                  }}
+                >
+                  Close
+                </Button>
+                {qualityTarget && (meQuery.data?.role === "Owner" || meQuery.data?.role === "Admin") ? (
+                  <>
+                    <Button
+                      type="button"
+                      className="bg-emerald-600 hover:bg-emerald-500"
+                      disabled={approveMutation.isPending || qualityTarget.status !== "needs_approval"}
+                      onClick={() => approveMutation.mutate(qualityTarget.id)}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      type="button"
+                      className="bg-rose-600 hover:bg-rose-500"
+                      disabled={rejectMutation.isPending}
+                      onClick={() => rejectMutation.mutate({ postId: qualityTarget.id, reason: rejectReason || "Rejected by reviewer" })}
+                    >
+                      Reject
+                    </Button>
+                  </>
+                ) : null}
+              </>
+            }
+          >
+            {qualityReportQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Spinner /> Loading quality report...
+              </div>
+            ) : qualityReportQuery.data?.report ? (
+              <div className="space-y-3 text-sm text-slate-700">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                    Score {qualityReportQuery.data.report.score}
+                  </span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs ${
+                      qualityReportQuery.data.report.risk_level === "high"
+                        ? "bg-rose-100 text-rose-700"
+                        : qualityReportQuery.data.report.risk_level === "medium"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-emerald-100 text-emerald-700"
+                    }`}
+                  >
+                    {qualityReportQuery.data.report.risk_level}
+                  </span>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900">Fix suggestions</div>
+                  {qualityReportQuery.data.report.recommendations.length === 0 ? (
+                    <div className="text-slate-500">No recommendations.</div>
+                  ) : (
+                    <ul className="list-disc space-y-1 pl-5">
+                      {qualityReportQuery.data.report.recommendations.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900">Issues</div>
+                  {qualityReportQuery.data.report.issues.length === 0 ? (
+                    <div className="text-slate-500">No issues detected.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {qualityReportQuery.data.report.issues.map((issue, index) => (
+                        <div key={`${issue.code}-${index}`} className="rounded border border-slate-200 px-3 py-2">
+                          <div className="font-medium text-slate-900">
+                            {issue.code} <span className="text-xs uppercase text-slate-500">{issue.severity}</span>
+                          </div>
+                          <div>{issue.message}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {qualityTarget && (meQuery.data?.role === "Owner" || meQuery.data?.role === "Admin") ? (
+                  <div>
+                    <div className="mb-1 font-semibold text-slate-900">Reject reason</div>
+                    <textarea
+                      className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      value={rejectReason}
+                      onChange={(event) => setRejectReason(event.target.value)}
+                      placeholder="Add reason for rejection"
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500">No quality report yet. Run quality check first.</div>
+            )}
+          </Modal>
         </>
       )}
     </div>

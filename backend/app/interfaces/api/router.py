@@ -7,6 +7,7 @@ from app.interfaces.api.automation import router as automation_router
 from app.interfaces.api.auth import router as auth_router
 from app.interfaces.api.billing import public_router as public_billing_router
 from app.interfaces.api.billing import router as billing_router
+from app.interfaces.api.brand_profiles import router as brand_profiles_router
 from app.interfaces.api.channels import router as channels_router
 from app.interfaces.api.connectors import router as connectors_router
 from app.interfaces.api.feature_flags import router as feature_flags_router
@@ -28,6 +29,7 @@ api_router.include_router(public_billing_router)
 api_router.include_router(stripe_webhooks_router)
 api_router.include_router(feature_flags_router)
 api_router.include_router(billing_router)
+api_router.include_router(brand_profiles_router)
 api_router.include_router(projects_router)
 api_router.include_router(channels_router)
 api_router.include_router(connectors_router)

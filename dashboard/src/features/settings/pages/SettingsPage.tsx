@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
@@ -17,11 +17,19 @@ import {
 import { getConnectorOauthStartUrl, listAvailableConnectors } from "@/shared/api/connectorsApi";
 import { getApiErrorMessage } from "@/shared/api/errors";
 import { listFeatureFlags, patchFeatureFlag } from "@/shared/api/featureFlagsApi";
+import {
+  createBrandProfile,
+  listBrandProfiles,
+  patchBrandProfile,
+  deleteBrandProfile,
+} from "@/shared/api/brandProfilesApi";
+import { listProjects } from "@/shared/api/projectsApi";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PlanUsageBars } from "@/shared/components/PlanUsageBars";
 import { SmartTooltip } from "@/shared/components/SmartTooltip";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
+import { Input } from "@/shared/components/ui/Input";
 import { Spinner } from "@/shared/components/ui/Spinner";
 
 export function SettingsPage(): JSX.Element {
@@ -29,6 +37,12 @@ export function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const { tenantId } = useTenant();
+  const [selectedProjectForProfile, setSelectedProjectForProfile] = useState<string>("");
+  const [brandName, setBrandName] = useState("Control Center");
+  const [brandTone, setBrandTone] = useState("professional");
+  const [brandLanguage, setBrandLanguage] = useState("pl");
+  const [forbiddenClaims, setForbiddenClaims] = useState("");
+  const [dontList, setDontList] = useState("");
   const profileQuery = useQuery({
     queryKey: ["me"],
     queryFn: me,
@@ -51,6 +65,16 @@ export function SettingsPage(): JSX.Element {
   const billingHistoryQuery = useQuery({
     queryKey: ["billingHistory", tenantId],
     queryFn: () => getBillingHistory(30),
+    enabled: Boolean(tenantId),
+  });
+  const projectsQuery = useQuery({
+    queryKey: ["projects", tenantId],
+    queryFn: () => listProjects(tenantId),
+    enabled: Boolean(tenantId),
+  });
+  const brandProfilesQuery = useQuery({
+    queryKey: ["brandProfiles", tenantId, selectedProjectForProfile || "default"],
+    queryFn: () => listBrandProfiles(selectedProjectForProfile || undefined),
     enabled: Boolean(tenantId),
   });
 
@@ -116,11 +140,70 @@ export function SettingsPage(): JSX.Element {
     },
     onError: (error) => pushToast(getApiErrorMessage(error, "Failed to reactivate subscription"), "error"),
   });
+  const brandProfileMutation = useMutation({
+    mutationFn: async () => {
+      const existing = (brandProfilesQuery.data ?? []).find(
+        (item) => (item.project_id ?? "") === (selectedProjectForProfile || "")
+      );
+      const payload = {
+        project_id: selectedProjectForProfile || null,
+        brand_name: brandName,
+        tone: brandTone,
+        language: brandLanguage,
+        forbidden_claims: forbiddenClaims
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        dont_list: dontList
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        do_list: [],
+        preferred_hashtags: [],
+        target_audience: null,
+        compliance_notes: null,
+      };
+      if (existing) {
+        return patchBrandProfile(existing.id, payload);
+      }
+      return createBrandProfile(payload);
+    },
+    onSuccess: async () => {
+      pushToast("Brand profile saved", "success");
+      await queryClient.invalidateQueries({ queryKey: ["brandProfiles", tenantId] });
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to save brand profile"), "error"),
+  });
+  const deleteBrandProfileMutation = useMutation({
+    mutationFn: (profileId: string) => deleteBrandProfile(profileId),
+    onSuccess: async () => {
+      pushToast("Brand profile deleted", "success");
+      await queryClient.invalidateQueries({ queryKey: ["brandProfiles", tenantId] });
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to delete brand profile"), "error"),
+  });
 
   const externalConnectors = useMemo(
     () => (connectorsQuery.data ?? []).filter((connector) => connector.platform !== "website"),
     [connectorsQuery.data]
   );
+  const selectedProfile = useMemo(
+    () =>
+      (brandProfilesQuery.data ?? []).find((item) => (item.project_id ?? "") === (selectedProjectForProfile || "")) ??
+      null,
+    [brandProfilesQuery.data, selectedProjectForProfile]
+  );
+
+  useEffect(() => {
+    if (!selectedProfile) {
+      return;
+    }
+    setBrandName(selectedProfile.brand_name || "Control Center");
+    setBrandTone(selectedProfile.tone || "professional");
+    setBrandLanguage(selectedProfile.language || "pl");
+    setForbiddenClaims((selectedProfile.forbidden_claims ?? []).join(", "));
+    setDontList((selectedProfile.dont_list ?? []).join(", "));
+  }, [selectedProfile]);
 
   return (
     <div className="space-y-6">
@@ -254,6 +337,89 @@ export function SettingsPage(): JSX.Element {
                 </Button>
               </div>
             ))}
+          </div>
+        )}
+      </Card>
+
+      <Card title="Brand Profile & Quality Gate">
+        {!tenantId ? (
+          <div className="text-sm text-slate-600">Set tenant context to configure brand profile.</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid gap-2 md:grid-cols-3">
+              <div className="md:col-span-1">
+                <label className="mb-1 block text-xs font-semibold text-slate-600">Profile scope</label>
+                <select
+                  value={selectedProjectForProfile}
+                  onChange={(event) => setSelectedProjectForProfile(event.target.value)}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Tenant default</option>
+                  {(projectsQuery.data?.items ?? []).map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-xs font-semibold text-slate-600">Brand name</label>
+                <Input value={brandName} onChange={(event) => setBrandName(event.target.value)} placeholder="Brand name" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">Tone</label>
+                <select
+                  value={brandTone}
+                  onChange={(event) => setBrandTone(event.target.value)}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="professional">professional</option>
+                  <option value="friendly">friendly</option>
+                  <option value="premium">premium</option>
+                  <option value="playful">playful</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">Language</label>
+                <Input value={brandLanguage} onChange={(event) => setBrandLanguage(event.target.value)} placeholder="pl" />
+              </div>
+              <div className="md:col-span-3">
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  Forbidden claims (comma separated)
+                </label>
+                <Input
+                  value={forbiddenClaims}
+                  onChange={(event) => setForbiddenClaims(event.target.value)}
+                  placeholder="guaranteed results, risk-free forever"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  Prohibited words (comma separated)
+                </label>
+                <Input value={dontList} onChange={(event) => setDontList(event.target.value)} placeholder="cheap, spammy" />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => brandProfileMutation.mutate()} disabled={brandProfileMutation.isPending}>
+                {brandProfileMutation.isPending ? "Saving..." : "Save profile"}
+              </Button>
+              {selectedProfile ? (
+                <Button
+                  type="button"
+                  className="bg-rose-600 hover:bg-rose-500"
+                  onClick={() => deleteBrandProfileMutation.mutate(selectedProfile.id)}
+                  disabled={deleteBrandProfileMutation.isPending}
+                >
+                  Delete profile
+                </Button>
+              ) : null}
+            </div>
+            <div className="text-xs text-slate-500">
+              Enable feature flags <span className="font-semibold">v1_ai_quality_engine</span> and{" "}
+              <span className="font-semibold">v1_ai_quality_gate</span> in the section above to enforce quality checks
+              before publish.
+            </div>
           </div>
         )}
       </Card>

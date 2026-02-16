@@ -899,6 +899,101 @@ The worker maps failures to normalized provider error metadata:
 2. Redeploy previous backend image.
 3. Keep migration in place (additive schema); old code remains compatible.
 
+## V1 Finalization - Phase C (AI Quality Engine Minimal)
+
+### Migration Summary
+
+- `0017_ai_quality_v1`
+  - adds post status `needs_approval` to `posts` check constraint
+  - new tables:
+    - `brand_profiles`
+    - `post_quality_reports`
+    - `ai_generation_logs`
+
+### New Endpoints
+
+Brand profiles:
+- `GET /brand-profiles`
+- `POST /brand-profiles`
+- `PATCH /brand-profiles/{id}`
+- `DELETE /brand-profiles/{id}`
+
+Post quality:
+- `POST /posts/{id}/quality-check`
+- `GET /posts/{id}/quality-report`
+- `POST /posts/{id}/approve`
+- `POST /posts/{id}/reject`
+
+### New Feature Flags
+
+- `v1_ai_quality_engine`
+- `v1_ai_quality_gate`
+
+### Example Brand Profile JSON
+
+```json
+{
+  "project_id": "11111111-1111-4111-8111-111111111111",
+  "brand_name": "Control Center",
+  "language": "pl",
+  "tone": "professional",
+  "target_audience": "SaaS growth teams",
+  "do_list": ["Use concrete outcomes", "Be transparent about limits"],
+  "dont_list": ["cheap", "spammy"],
+  "forbidden_claims": ["guaranteed roi", "risk-free forever"],
+  "preferred_hashtags": ["#controlcenter", "#marketingops"],
+  "compliance_notes": "Avoid legal/medical claims."
+}
+```
+
+### Example Quality Report JSON
+
+```json
+{
+  "post_id": "22222222-2222-4222-8222-222222222222",
+  "score": 42,
+  "risk_level": "high",
+  "issues": [
+    {
+      "code": "forbidden_claim",
+      "message": "Forbidden claim detected: 'guaranteed roi'.",
+      "severity": "block",
+      "suggestion": "Remove absolute or non-compliant claims from the post."
+    },
+    {
+      "code": "pii_email",
+      "message": "Potential email address detected.",
+      "severity": "block",
+      "suggestion": "Remove personal emails from public posts."
+    }
+  ],
+  "recommendations": [
+    "Remove absolute or non-compliant claims from the post.",
+    "Remove personal emails from public posts."
+  ],
+  "status": "needs_approval"
+}
+```
+
+### Smoke Checklist (API + UI)
+
+1. Enable flags for tenant:
+   - `v1_ai_quality_engine`
+   - `v1_ai_quality_gate`
+2. Create brand profile in Settings.
+3. Create risky post, run `Quality check` in Posts.
+4. Confirm status becomes `needs_approval`.
+5. Verify `Publish now` is blocked.
+6. Approve post (Owner/Admin), then publish/schedule succeeds.
+7. Optional scripted flow:
+   - `bash backend/scripts/test_ai_quality_flow.sh`
+
+### Rollback Plan
+
+1. Disable `v1_ai_quality_engine` and `v1_ai_quality_gate`.
+2. Redeploy previous app image if needed.
+3. Keep migration (additive schema) in place; previous code remains compatible.
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

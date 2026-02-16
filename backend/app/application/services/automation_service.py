@@ -18,6 +18,8 @@ from app.application.services.ai_quality_service import (
     get_or_create_policy,
 )
 from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.ai_generation_contract import build_generation_contract
+from app.application.services.ai_generation_log_service import log_ai_generation
 from app.application.services.ai_provider import (
     AIContentRequest,
     AIProviderError,
@@ -404,6 +406,12 @@ def _action_generate_post(db: Session, run: AutomationRun, rule: AutomationRule)
     )
 
     ai_provider = get_ai_provider()
+    generation_contract = build_generation_contract(
+        template=str(prompt_template),
+        variables=variables,
+        brand_profile=brand_profile,
+        language=str(language),
+    )
     try:
         generated = asyncio.run(
             ai_provider.generate_post_text(
@@ -416,7 +424,25 @@ def _action_generate_post(db: Session, run: AutomationRun, rule: AutomationRule)
                 )
             )
         )
+        log_ai_generation(
+            db,
+            tenant_id=run.company_id,
+            project_id=run.project_id,
+            model=getattr(ai_provider, "model", "unknown"),
+            input_context=generation_contract,
+            output={"status": "success", "payload": generated},
+            post_id=None,
+        )
     except AIProviderError as exc:
+        log_ai_generation(
+            db,
+            tenant_id=run.company_id,
+            project_id=run.project_id,
+            model=getattr(ai_provider, "model", "unknown"),
+            input_context=generation_contract,
+            output={"status": "error", "message": str(exc)},
+            post_id=None,
+        )
         failed_item = ContentItem(
             company_id=run.company_id,
             project_id=run.project_id,

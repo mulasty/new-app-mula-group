@@ -11,6 +11,7 @@ from app.infrastructure.db.base import Base
 
 class PostStatus(StrEnum):
     DRAFT = "draft"
+    NEEDS_APPROVAL = "needs_approval"
     SCHEDULED = "scheduled"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
@@ -22,7 +23,7 @@ class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft', 'scheduled', 'publishing', 'published', 'published_partial', 'failed')",
+            "status IN ('draft', 'needs_approval', 'scheduled', 'publishing', 'published', 'published_partial', 'failed')",
             name="ck_posts_status_values",
         ),
     )

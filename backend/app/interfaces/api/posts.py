@@ -11,10 +11,18 @@ from app.application.services.publishing_service import emit_publish_event, publ
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import enforce_post_limit, increment_post_usage
 from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.post_quality_service import (
+    create_post_quality_report,
+    evaluate_post_quality,
+    extract_recommendations,
+    get_latest_quality_report,
+    resolve_brand_profile,
+)
 from app.application.services.template_renderer import render_prompt_template
 from app.application.services.platform_ops_service import TENANT_RISK_THRESHOLD, calculate_tenant_risk_score
 from app.domain.models.content_template import ContentTemplate
 from app.domain.models.post import Post, PostStatus
+from app.domain.models.post_quality_report import PostQualityReport
 from app.domain.models.project import Project
 from app.domain.models.publish_event import PublishEvent
 from app.domain.models.user import User, UserRole
@@ -43,6 +51,15 @@ class SchedulePostRequest(BaseModel):
     publish_at: datetime
 
 
+class PostRejectRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class PostQualityCheckRequest(BaseModel):
+    brand_profile_id: UUID | None = None
+    recent_posts_window: int = Field(default=20, ge=5, le=100)
+
+
 class CreateFromTemplateRequest(BaseModel):
     project_id: UUID
     template_id: UUID
@@ -64,6 +81,16 @@ def _enforce_tenant_risk_controls(db: Session, *, tenant_id: UUID) -> None:
 
 
 def _serialize_post(post: Post) -> dict:
+    quality = getattr(post, "_quality_report", None)
+    quality_payload = None
+    if quality is not None:
+        quality_payload = {
+            "score": quality.score,
+            "risk_level": quality.risk_level,
+            "issues": quality.issues or [],
+            "recommendations": extract_recommendations(quality.issues or []),
+            "created_at": quality.created_at.isoformat(),
+        }
     return {
         "id": str(post.id),
         "company_id": str(post.company_id),
@@ -73,9 +100,96 @@ def _serialize_post(post: Post) -> dict:
         "status": post.status,
         "publish_at": post.publish_at.isoformat() if post.publish_at else None,
         "last_error": post.last_error,
+        "quality_report": quality_payload,
         "created_at": post.created_at.isoformat(),
         "updated_at": post.updated_at.isoformat(),
     }
+
+
+def _attach_quality_reports(db: Session, *, tenant_id: UUID, rows: list[Post]) -> None:
+    if not rows:
+        return
+    post_ids = [row.id for row in rows]
+    reports = db.execute(
+        select(PostQualityReport)
+        .where(PostQualityReport.company_id == tenant_id, PostQualityReport.post_id.in_(post_ids))
+        .order_by(PostQualityReport.post_id.asc(), PostQualityReport.created_at.desc())
+    ).scalars().all()
+    latest_by_post: dict[UUID, PostQualityReport] = {}
+    for report in reports:
+        if report.post_id not in latest_by_post:
+            latest_by_post[report.post_id] = report
+    for row in rows:
+        setattr(row, "_quality_report", latest_by_post.get(row.id))
+
+
+def _run_quality_check(
+    db: Session,
+    *,
+    post: Post,
+    tenant_id: UUID,
+    brand_profile_id: UUID | None,
+    recent_posts_window: int = 20,
+) -> PostQualityReport:
+    profile = resolve_brand_profile(
+        db,
+        tenant_id=tenant_id,
+        project_id=post.project_id,
+        brand_profile_id=brand_profile_id,
+    )
+    recent_rows = db.execute(
+        select(Post)
+        .where(
+            Post.company_id == tenant_id,
+            Post.project_id == post.project_id,
+            Post.id != post.id,
+        )
+        .order_by(Post.created_at.desc())
+        .limit(recent_posts_window)
+    ).scalars().all()
+    result = evaluate_post_quality(
+        title=post.title,
+        body=post.content,
+        brand_profile=profile,
+        recent_posts=recent_rows,
+    )
+    return create_post_quality_report(db, post=post, result=result)
+
+
+def _enforce_quality_gate(db: Session, *, tenant_id: UUID, post: Post) -> None:
+    if not is_feature_enabled(db, key="v1_ai_quality_gate", tenant_id=tenant_id):
+        return
+    if post.status == PostStatus.NEEDS_APPROVAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Post requires manual approval before publishing",
+        )
+    report = get_latest_quality_report(db, tenant_id=tenant_id, post_id=post.id)
+    if report is None:
+        report = _run_quality_check(db, post=post, tenant_id=tenant_id, brand_profile_id=None)
+    has_block = any(str(item.get("severity")) == "block" for item in (report.issues or []))
+    if report.risk_level == "high" or has_block:
+        post.status = PostStatus.NEEDS_APPROVAL.value
+        post.last_error = "Quality gate blocked publish. Approval required."
+        db.add(post)
+        emit_publish_event(
+            db,
+            company_id=post.company_id,
+            project_id=post.project_id,
+            post_id=post.id,
+            event_type="PostNeedsApproval",
+            status="error",
+            metadata_json={
+                "quality_score": report.score,
+                "risk_level": report.risk_level,
+                "issues": report.issues or [],
+            },
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Quality gate blocked publish. Review issues and approve post first.",
+        )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -208,6 +322,7 @@ def list_posts(
         query = query.where(Post.status == status_filter)
 
     rows = db.execute(query.order_by(Post.created_at.desc())).scalars().all()
+    _attach_quality_reports(db, tenant_id=tenant_id, rows=rows)
     return {"items": [_serialize_post(row) for row in rows]}
 
 
@@ -228,10 +343,10 @@ def update_post(
     if payload.content is not None:
         post.content = payload.content.strip()
     if payload.status is not None:
-        if payload.status not in {PostStatus.DRAFT.value, PostStatus.SCHEDULED.value}:
+        if payload.status not in {PostStatus.DRAFT.value, PostStatus.SCHEDULED.value, PostStatus.NEEDS_APPROVAL.value}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Status can only be draft or scheduled via this endpoint",
+                detail="Status can only be draft, scheduled or needs_approval via this endpoint",
             )
         post.status = payload.status
 
@@ -253,6 +368,7 @@ def schedule_post(
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    _enforce_quality_gate(db, tenant_id=tenant_id, post=post)
 
     publish_at = payload.publish_at if payload.publish_at.tzinfo else payload.publish_at.replace(tzinfo=UTC)
     post.status = PostStatus.SCHEDULED.value
@@ -294,6 +410,7 @@ def publish_now(
     post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    _enforce_quality_gate(db, tenant_id=tenant_id, post=post)
 
     now = datetime.now(UTC)
     post.status = PostStatus.SCHEDULED.value
@@ -364,3 +481,132 @@ def get_post_timeline(
             for row in rows
         ]
     }
+
+
+@router.post("/{post_id}/quality-check", status_code=status.HTTP_200_OK)
+def quality_check_post(
+    post_id: UUID,
+    payload: PostQualityCheckRequest,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.EDITOR)),
+) -> dict:
+    if not is_feature_enabled(db, key="v1_ai_quality_engine", tenant_id=tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI quality engine disabled")
+    post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    report = _run_quality_check(
+        db,
+        post=post,
+        tenant_id=tenant_id,
+        brand_profile_id=payload.brand_profile_id,
+        recent_posts_window=payload.recent_posts_window,
+    )
+    if report.risk_level == "high" or any(str(item.get("severity")) == "block" for item in (report.issues or [])):
+        post.status = PostStatus.NEEDS_APPROVAL.value
+        post.last_error = "Quality gate flagged this post for manual approval."
+    else:
+        if post.status == PostStatus.NEEDS_APPROVAL.value:
+            post.status = PostStatus.DRAFT.value
+            post.last_error = None
+    db.add(post)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.quality_checked",
+        metadata={"post_id": str(post.id), "project_id": str(post.project_id), "user_id": str(current_user.id)},
+    )
+    db.commit()
+    return {
+        "post_id": str(post.id),
+        "score": report.score,
+        "risk_level": report.risk_level,
+        "issues": report.issues or [],
+        "recommendations": extract_recommendations(report.issues or []),
+        "status": post.status,
+        "created_at": report.created_at.isoformat(),
+    }
+
+
+@router.get("/{post_id}/quality-report", status_code=status.HTTP_200_OK)
+def get_post_quality_report(
+    post_id: UUID,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if not is_feature_enabled(db, key="v1_ai_quality_engine", tenant_id=tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI quality engine disabled")
+    exists = db.execute(select(Post.id).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    report = get_latest_quality_report(db, tenant_id=tenant_id, post_id=post_id)
+    if report is None:
+        return {"post_id": str(post_id), "report": None}
+    return {
+        "post_id": str(post_id),
+        "report": {
+            "score": report.score,
+            "risk_level": report.risk_level,
+            "issues": report.issues or [],
+            "recommendations": extract_recommendations(report.issues or []),
+            "created_at": report.created_at.isoformat(),
+        },
+    }
+
+
+@router.post("/{post_id}/approve", status_code=status.HTTP_200_OK)
+def approve_post(
+    post_id: UUID,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+) -> dict:
+    post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    if post.status != PostStatus.NEEDS_APPROVAL.value:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Post is not awaiting approval")
+    post.status = PostStatus.DRAFT.value
+    post.last_error = None
+    db.add(post)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.approved",
+        metadata={"post_id": str(post.id), "project_id": str(post.project_id), "user_id": str(current_user.id)},
+    )
+    db.commit()
+    db.refresh(post)
+    return _serialize_post(post)
+
+
+@router.post("/{post_id}/reject", status_code=status.HTTP_200_OK)
+def reject_post(
+    post_id: UUID,
+    payload: PostRejectRequest,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+) -> dict:
+    post = db.execute(select(Post).where(Post.id == post_id, Post.company_id == tenant_id)).scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    post.status = PostStatus.NEEDS_APPROVAL.value
+    post.last_error = payload.reason.strip()
+    db.add(post)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.rejected",
+        metadata={
+            "post_id": str(post.id),
+            "project_id": str(post.project_id),
+            "reason": payload.reason.strip(),
+            "user_id": str(current_user.id),
+        },
+    )
+    db.commit()
+    db.refresh(post)
+    return _serialize_post(post)

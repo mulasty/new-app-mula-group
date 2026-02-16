@@ -8,6 +8,7 @@ type StatusChipProps = {
 
 const statusStyles: Record<PostStatus, string> = {
   draft: "border-slate-300 bg-slate-100 text-slate-700",
+  needs_approval: "border-orange-300 bg-orange-50 text-orange-700",
   scheduled: "border-amber-300 bg-amber-50 text-amber-700",
   publishing: "border-blue-300 bg-blue-50 text-blue-700",
   published: "border-emerald-300 bg-emerald-50 text-emerald-700",
