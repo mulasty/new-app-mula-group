@@ -31,6 +31,9 @@ class ContentTemplate(Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="educational")
+    tone: Mapped[str] = mapped_column(String(64), nullable=False, default="professional")
+    content_structure: Mapped[str] = mapped_column(Text, nullable=False, default="")
     template_type: Mapped[str] = mapped_column(String(32), nullable=False, default=ContentTemplateType.POST_TEXT.value)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     output_schema_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

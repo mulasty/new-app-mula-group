@@ -40,6 +40,7 @@ export type MeResponse = {
 export type TenantContextResponse = {
   tenant_id?: string | null;
   current_tenant_id?: string | null;
+  tenant_name?: string | null;
   tenants?: Array<{ id: string; name?: string }>;
 };
 
@@ -217,6 +218,9 @@ export type ContentTemplate = {
   company_id: string;
   project_id: string;
   name: string;
+  category?: "product launch" | "educational" | "social proof" | "engagement" | "promotional" | string;
+  tone?: string;
+  content_structure?: string;
   template_type: "post_text" | "carousel_plan" | "video_script";
   prompt_template: string;
   output_schema_json: Record<string, unknown>;
@@ -323,7 +327,25 @@ export type BillingSnapshot = {
   plan: BillingPlan;
   usage: {
     posts_used_current_period: number;
+    projects_count?: number;
+    connectors_count?: number;
+    posts_usage_percent?: number;
+    projects_usage_percent?: number;
+    connectors_usage_percent?: number;
   };
+  lifecycle?: {
+    in_grace_period: boolean;
+    expired: boolean;
+    days_left_in_period: number;
+  };
+};
+
+export type BillingEventItem = {
+  id: string;
+  event_type: string;
+  message: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
 };
 
 export type AdminTenantItem = {

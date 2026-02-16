@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { listChannels } from "@/shared/api/channelsApi";
@@ -14,7 +14,11 @@ type OnboardingProgress = {
 
 export function useOnboardingStatus() {
   const { tenantId, isContextKnown } = useTenant();
-  const [progress, setProgress] = useState<OnboardingProgress>(getOnboardingState());
+  const [progress, setProgress] = useState<OnboardingProgress>(getOnboardingState(tenantId));
+
+  useEffect(() => {
+    setProgress(getOnboardingState(tenantId));
+  }, [tenantId]);
 
   const canInspectResources = Boolean(tenantId) && isContextKnown;
 
@@ -68,7 +72,7 @@ export function useOnboardingStatus() {
   const showSoftReminder = progress.skipped && isOnboardingRequired;
 
   const updateProgress = (next: OnboardingProgress) => {
-    setOnboardingState(next);
+    setOnboardingState(next, tenantId);
     setProgress(next);
   };
 
@@ -86,6 +90,7 @@ export function useOnboardingStatus() {
     projectsQuery,
     channelsQuery,
     postsQuery,
+    progressPercent: Math.min(100, Math.max(0, (recommendedStep - 1) * 25)),
     completeOnboarding,
     skipForNow,
     resumeOnboarding,

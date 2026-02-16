@@ -5,11 +5,12 @@ import { AxiosError } from "axios";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
-import { createCheckoutSession } from "@/shared/api/billingApi";
+import { createCheckoutSession, getCurrentBilling } from "@/shared/api/billingApi";
 import { getApiErrorMessage } from "@/shared/api/errors";
 import { createProject, listProjects } from "@/shared/api/projectsApi";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PlanUsageBars } from "@/shared/components/PlanUsageBars";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
 import { Input } from "@/shared/components/ui/Input";
@@ -27,6 +28,13 @@ export function ProjectsPage(): JSX.Element {
     queryFn: () => listProjects(tenantId),
     enabled: Boolean(tenantId),
   });
+  const billingQuery = useQuery({
+    queryKey: ["billingCurrent", tenantId],
+    queryFn: () => getCurrentBilling(),
+    enabled: Boolean(tenantId),
+  });
+  const projectLimitReached =
+    (billingQuery.data?.usage.projects_count ?? 0) >= (billingQuery.data?.plan.max_projects ?? Number.POSITIVE_INFINITY);
 
   const createMutation = useMutation({
     mutationFn: (projectName: string) => createProject(projectName, tenantId),
@@ -59,6 +67,11 @@ export function ProjectsPage(): JSX.Element {
       ) : (
         <>
           <Card title="Create project">
+            {billingQuery.data ? (
+              <div className="mb-3">
+                <PlanUsageBars billing={billingQuery.data} />
+              </div>
+            ) : null}
             {planLimitHit ? (
               <div className="mb-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                 Plan limit exceeded. Upgrade plan to create more projects.
@@ -84,12 +97,15 @@ export function ProjectsPage(): JSX.Element {
               <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" />
               <Button
                 type="button"
-                disabled={!name.trim() || createMutation.isPending}
+                disabled={!name.trim() || createMutation.isPending || projectLimitReached}
                 onClick={() => createMutation.mutate(name.trim())}
               >
                 {createMutation.isPending ? "Creating..." : "Create"}
               </Button>
             </div>
+            {projectLimitReached ? (
+              <div className="mt-2 text-xs text-amber-700">Project limit reached for current plan.</div>
+            ) : null}
           </Card>
 
           {projectsQuery.data?.backendMissing ? (

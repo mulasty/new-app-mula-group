@@ -85,6 +85,32 @@ After login with tenant headers:
    - verify `/posts/{id}/publish-now` returns guardrail response
    - disable breaker with `{ "enabled": false, "reason": "rollback" }`
 
+## V1 Finalization - Phase A Smoke
+
+1. Open `/app/onboarding` and verify progress bar reaches `100%`.
+2. Confirm onboarding state is isolated per tenant:
+   - switch tenant
+   - onboarding progress should not bleed between tenants.
+3. In onboarding step 4:
+   - generate post from template
+   - test both `Generate and schedule` and `Generate and publish`.
+4. In `/app/posts`, confirm smart tooltips are dismissible and do not reappear after refresh.
+5. In `/app/settings`:
+   - verify usage bars for posts/projects/connectors
+   - verify subscription lifecycle buttons:
+     - upgrade
+     - downgrade
+     - cancel
+     - reactivate
+   - verify billing history entries appear.
+6. API checks:
+   - `POST /posts/from-template`
+   - `GET /billing/history`
+   - `POST /billing/upgrade`
+   - `POST /billing/downgrade`
+   - `POST /billing/cancel`
+   - `POST /billing/reactivate`
+
 ## Publishing Flow Smoke (Phase-4)
 
 ```bash

@@ -35,6 +35,9 @@ export function ContentStudioPage(): JSX.Element {
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
   const [templateName, setTemplateName] = useState("");
+  const [templateCategory, setTemplateCategory] = useState("educational");
+  const [templateTone, setTemplateTone] = useState("professional");
+  const [templateStructure, setTemplateStructure] = useState("Hook -> insight -> CTA");
   const [templatePrompt, setTemplatePrompt] = useState("Napisz post o {{topic}} z CTA {{offer}}.");
   const [templateSchema, setTemplateSchema] = useState(
     JSON.stringify(
@@ -87,6 +90,9 @@ export function ContentStudioPage(): JSX.Element {
       createTemplate({
         project_id: activeProjectId,
         name: templateName.trim(),
+        category: templateCategory,
+        tone: templateTone,
+        content_structure: templateStructure,
         template_type: "post_text",
         prompt_template: templatePrompt,
         output_schema_json: JSON.parse(templateSchema),
@@ -180,6 +186,25 @@ export function ContentStudioPage(): JSX.Element {
                 onChange={(event) => setTemplateName(event.target.value)}
                 placeholder="Template name"
               />
+              <div className="grid gap-2 md:grid-cols-3">
+                <select
+                  value={templateCategory}
+                  onChange={(event) => setTemplateCategory(event.target.value)}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="product launch">product launch</option>
+                  <option value="educational">educational</option>
+                  <option value="social proof">social proof</option>
+                  <option value="engagement">engagement</option>
+                  <option value="promotional">promotional</option>
+                </select>
+                <Input value={templateTone} onChange={(event) => setTemplateTone(event.target.value)} placeholder="Tone" />
+                <Input
+                  value={templateStructure}
+                  onChange={(event) => setTemplateStructure(event.target.value)}
+                  placeholder="Content structure"
+                />
+              </div>
               <textarea
                 value={templatePrompt}
                 onChange={(event) => setTemplatePrompt(event.target.value)}

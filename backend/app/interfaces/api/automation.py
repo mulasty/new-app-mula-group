@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.services.automation_service import create_automation_run, enqueue_automation_run
+from app.application.services.feature_flag_service import is_feature_enabled
 from app.application.services.publishing_service import emit_publish_event
 from app.domain.models.approval import Approval, ApprovalStatus
 from app.domain.models.automation_event import AutomationEvent
@@ -27,6 +28,8 @@ from app.interfaces.api.deps import get_current_user, require_roles, require_ten
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(tags=["automation"])
+
+TEMPLATE_CATEGORIES = {"product launch", "educational", "social proof", "engagement", "promotional"}
 
 
 def _serialize_campaign(item: Campaign) -> dict[str, Any]:
@@ -51,6 +54,9 @@ def _serialize_template(item: ContentTemplate) -> dict[str, Any]:
         "company_id": str(item.company_id),
         "project_id": str(item.project_id),
         "name": item.name,
+        "category": item.category,
+        "tone": item.tone,
+        "content_structure": item.content_structure,
         "template_type": item.template_type,
         "prompt_template": item.prompt_template,
         "output_schema_json": item.output_schema_json or {},
@@ -152,6 +158,9 @@ class CampaignPatchRequest(BaseModel):
 class TemplateCreateRequest(BaseModel):
     project_id: UUID
     name: str = Field(min_length=2, max_length=255)
+    category: str = Field(default="educational", min_length=2, max_length=64)
+    tone: str = Field(default="professional", min_length=2, max_length=64)
+    content_structure: str = Field(default="", max_length=2000)
     template_type: str = Field(default=ContentTemplateType.POST_TEXT.value)
     prompt_template: str = Field(min_length=10)
     output_schema_json: dict[str, Any] = Field(default_factory=dict)
@@ -160,6 +169,9 @@ class TemplateCreateRequest(BaseModel):
 
 class TemplatePatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
+    category: str | None = Field(default=None, min_length=2, max_length=64)
+    tone: str | None = Field(default=None, min_length=2, max_length=64)
+    content_structure: str | None = Field(default=None, max_length=2000)
     template_type: str | None = None
     prompt_template: str | None = Field(default=None, min_length=10)
     output_schema_json: dict[str, Any] | None = None
@@ -205,6 +217,74 @@ class ContentReviewRequest(BaseModel):
 
 class ContentScheduleRequest(BaseModel):
     publish_at: datetime
+
+
+def _create_default_templates(db: Session, *, tenant_id: UUID, project_id: UUID) -> None:
+    existing = db.execute(
+        select(ContentTemplate.id).where(
+            ContentTemplate.company_id == tenant_id,
+            ContentTemplate.project_id == project_id,
+        )
+    ).first()
+    if existing is not None:
+        return
+
+    defaults = [
+        (
+            "Product launch template",
+            "product launch",
+            "bold",
+            "Hook -> key benefit -> social proof -> CTA",
+            "Opisz premierę produktu {{project_name}} i zachęć do działania: {{cta}}.",
+        ),
+        (
+            "Educational template",
+            "educational",
+            "expert",
+            "Problem -> insight -> practical tip -> CTA",
+            "Stwórz edukacyjny post o {{topic}} dla projektu {{project_name}}.",
+        ),
+        (
+            "Social proof template",
+            "social proof",
+            "trustworthy",
+            "Result -> quote -> impact -> CTA",
+            "Stwórz post social proof z referencją klienta i CTA: {{cta}}.",
+        ),
+        (
+            "Engagement template",
+            "engagement",
+            "friendly",
+            "Question -> short context -> call for comments",
+            "Napisz angażujący post z pytaniem otwartym o {{topic}}.",
+        ),
+        (
+            "Promotional template",
+            "promotional",
+            "persuasive",
+            "Offer -> urgency -> value -> CTA",
+            "Napisz post promocyjny dla {{project_name}} z ofertą {{offer}}.",
+        ),
+    ]
+
+    for name, category, tone, content_structure, prompt in defaults:
+        db.add(
+            ContentTemplate(
+                company_id=tenant_id,
+                project_id=project_id,
+                name=name,
+                category=category,
+                tone=tone,
+                content_structure=content_structure,
+                template_type=ContentTemplateType.POST_TEXT.value,
+                prompt_template=prompt,
+                output_schema_json={
+                    "type": "object",
+                    "required": ["title", "body", "hashtags", "cta", "channels", "risk_flags"],
+                },
+                default_values_json={},
+            )
+        )
 
 
 @router.post("/campaigns", status_code=status.HTTP_201_CREATED)
@@ -326,10 +406,15 @@ def create_template(
     _ensure_project_access(db, tenant_id=tenant_id, project_id=payload.project_id)
     if payload.template_type not in [item.value for item in ContentTemplateType]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid template type")
+    if payload.category.strip().lower() not in TEMPLATE_CATEGORIES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid template category")
     template = ContentTemplate(
         company_id=tenant_id,
         project_id=payload.project_id,
         name=payload.name.strip(),
+        category=payload.category.strip().lower(),
+        tone=payload.tone.strip(),
+        content_structure=payload.content_structure.strip(),
         template_type=payload.template_type,
         prompt_template=payload.prompt_template,
         output_schema_json=payload.output_schema_json or {},
@@ -344,13 +429,23 @@ def create_template(
 @router.get("/templates", status_code=status.HTTP_200_OK)
 def list_templates(
     project_id: UUID | None = Query(default=None),
+    category: str | None = Query(default=None),
     db: Session = Depends(get_db),
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if (
+        project_id is not None
+        and is_feature_enabled(db, key="v1_template_library", tenant_id=tenant_id)
+    ):
+        _create_default_templates(db, tenant_id=tenant_id, project_id=project_id)
+        db.commit()
+
     query = select(ContentTemplate).where(ContentTemplate.company_id == tenant_id)
     if project_id is not None:
         query = query.where(ContentTemplate.project_id == project_id)
+    if category is not None:
+        query = query.where(ContentTemplate.category == category.strip().lower())
     rows = db.execute(query.order_by(ContentTemplate.created_at.desc())).scalars().all()
     return {"items": [_serialize_template(item) for item in rows]}
 
@@ -370,6 +465,15 @@ def patch_template(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
     if payload.name is not None:
         template.name = payload.name.strip()
+    if payload.category is not None:
+        next_category = payload.category.strip().lower()
+        if next_category not in TEMPLATE_CATEGORIES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid template category")
+        template.category = next_category
+    if payload.tone is not None:
+        template.tone = payload.tone.strip()
+    if payload.content_structure is not None:
+        template.content_structure = payload.content_structure.strip()
     if payload.template_type is not None:
         if payload.template_type not in [item.value for item in ContentTemplateType]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid template type")

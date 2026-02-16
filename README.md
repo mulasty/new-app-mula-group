@@ -747,6 +747,57 @@ Auto-recovery behaviors (feature-flagged):
 - `SYSTEM_WORKER_BACKLOG_ALERT_THRESHOLD` (default `100`)
 - `TENANT_RISK_MANUAL_APPROVAL_THRESHOLD` (default `70`)
 
+## V1 Finalization - Phase A
+
+V1 Phase A focuses on activation, first value, and conversion without breaking existing API contracts.
+
+### New Migration
+
+- `0015_v1_activation_ux`
+  - adds template-library fields to `content_templates`:
+    - `category`
+    - `tone`
+    - `content_structure`
+  - adds `billing_events` for subscription lifecycle history
+
+### New/Extended Endpoints
+
+- Template library (extended existing endpoint):
+  - `GET /templates?project_id=...&category=...`
+- Template-based post creation:
+  - `POST /posts/from-template`
+- Subscription lifecycle:
+  - `POST /billing/upgrade`
+  - `POST /billing/downgrade`
+  - `POST /billing/cancel`
+  - `POST /billing/reactivate`
+  - `GET /billing/history`
+- Extended `GET /billing/current`:
+  - usage counters and usage percentages for posts/projects/connectors
+  - lifecycle indicators (`in_grace_period`, `expired`, `days_left_in_period`)
+
+### Activation Funnel (Dashboard)
+
+1. Tenant confirmation.
+2. Auto-create first project (feature-flagged path).
+3. Connect first channel with recommended default.
+4. Generate first post from template and immediately:
+   - save draft,
+   - schedule,
+   - or publish now.
+
+Onboarding progress is shown as `0% -> 25% -> 50% -> 75% -> 100%` and persisted per tenant.
+
+### New Feature Flags (V1 A)
+
+- `v1_onboarding_first_value`
+- `v1_auto_project_after_signup`
+- `v1_template_library`
+- `v1_smart_tooltips`
+- `v1_plan_limit_visualization`
+- `v1_subscription_lifecycle_ux`
+- `v1_conversion_nudges`
+
 ## Tenant Context
 
 Set tenant for tenant-scoped endpoints:

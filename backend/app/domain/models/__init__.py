@@ -4,6 +4,7 @@ from app.domain.models.audit_log import AuditLog
 from app.domain.models.automation_event import AutomationEvent
 from app.domain.models.automation_rule import AutomationRule
 from app.domain.models.automation_run import AutomationRun
+from app.domain.models.billing_event import BillingEvent
 from app.domain.models.campaign import Campaign
 from app.domain.models.channel import Channel
 from app.domain.models.company import Company
@@ -50,6 +51,7 @@ __all__ = [
     "Approval",
     "AIQualityPolicy",
     "AuditLog",
+    "BillingEvent",
     "AutomationRun",
     "AutomationEvent",
     "Channel",

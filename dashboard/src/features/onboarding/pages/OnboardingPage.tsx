@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -7,10 +7,9 @@ import { useToast } from "@/app/providers/ToastProvider";
 import { useOnboardingStatus } from "@/features/onboarding/hooks/useOnboardingStatus";
 import { createCheckoutSession } from "@/shared/api/billingApi";
 import { createWebsiteChannel } from "@/shared/api/channelsApi";
-import { createPost, schedulePost } from "@/shared/api/postsApi";
+import { createPostFromTemplate, publishNow, schedulePost } from "@/shared/api/postsApi";
 import { createProject } from "@/shared/api/projectsApi";
-import { createCampaign, createTemplate } from "@/shared/api/automationApi";
-import { PostStatus } from "@/shared/api/types";
+import { createCampaign, createTemplate, listTemplates } from "@/shared/api/automationApi";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { Button } from "@/shared/components/ui/Button";
@@ -30,6 +29,7 @@ export function OnboardingPage(): JSX.Element {
     isComplete,
     hasResourceData,
     projectsQuery,
+    progressPercent,
     completeOnboarding,
     skipForNow,
     resumeOnboarding,
@@ -50,15 +50,21 @@ export function OnboardingPage(): JSX.Element {
   const [projectIdDraft, setProjectIdDraft] = useState("");
   const [channelName, setChannelName] = useState("Website");
   const [postTitle, setPostTitle] = useState("");
-  const [postContent, setPostContent] = useState("");
-  const [postStatus, setPostStatus] = useState<Extract<PostStatus, "draft" | "scheduled">>("draft");
+  const [postAction, setPostAction] = useState<"save_draft" | "schedule" | "publish_now">("save_draft");
   const [postScheduledAt, setPostScheduledAt] = useState("");
+  const [tone, setTone] = useState("professional");
   const [missingEndpointNote, setMissingEndpointNote] = useState<string | null>(null);
+  const [autocreateAttempted, setAutocreateAttempted] = useState(false);
 
   const currentProjectId = useMemo(
     () => projectIdDraft || projectsQuery.data?.items?.[0]?.id || "",
     [projectIdDraft, projectsQuery.data?.items]
   );
+  const templatesQuery = useQuery({
+    queryKey: ["templates", tenantId, currentProjectId],
+    queryFn: () => listTemplates(currentProjectId),
+    enabled: Boolean(tenantId && currentProjectId),
+  });
 
   useEffect(() => {
     if (stepFromQuery !== step) {
@@ -119,6 +125,27 @@ export function OnboardingPage(): JSX.Element {
     },
   });
 
+  useEffect(() => {
+    if (!tenantId || step !== 2 || projectMutation.isPending || autocreateAttempted) {
+      return;
+    }
+    const hasProjects = (projectsQuery.data?.items.length ?? 0) > 0;
+    if (hasProjects) {
+      return;
+    }
+    const defaultName = tenantContext?.tenant_name ? `${tenantContext.tenant_name} Workspace` : "My first project";
+    setProjectName(defaultName);
+    setAutocreateAttempted(true);
+    projectMutation.mutate();
+  }, [
+    tenantId,
+    step,
+    projectMutation,
+    autocreateAttempted,
+    projectsQuery.data?.items.length,
+    tenantContext?.tenant_name,
+  ]);
+
   const channelMutation = useMutation({
     mutationFn: () =>
       createWebsiteChannel(currentProjectId, tenantId, channelName.trim() || "Website"),
@@ -133,26 +160,45 @@ export function OnboardingPage(): JSX.Element {
 
   const postMutation = useMutation({
     mutationFn: async () => {
-      const created = await createPost(
+      const selectedTemplate = templatesQuery.data?.[0];
+      const created = await createPostFromTemplate(
         {
           project_id: currentProjectId,
-          title: postTitle.trim(),
-          content: postContent.trim(),
-          status: "draft",
+          template_id: selectedTemplate?.id ?? "",
+          title: postTitle.trim() || undefined,
+          variables: {
+            project_name: projectsQuery.data?.items?.find((item) => item.id === currentProjectId)?.name ?? "project",
+            topic: postTitle.trim() || "new offer",
+            offer: "Book a demo",
+            cta: "Try now",
+            tone,
+          },
+          status: postAction === "schedule" ? "scheduled" : "draft",
+          publish_at:
+            postAction === "schedule"
+              ? postScheduledAt
+                ? new Date(postScheduledAt).toISOString()
+                : new Date().toISOString()
+              : undefined,
         },
         tenantId
       );
 
-      if (postStatus === "scheduled") {
-        const scheduledAtIso = postScheduledAt ? new Date(postScheduledAt).toISOString() : new Date().toISOString();
-        const scheduled = await schedulePost(created.item.id, scheduledAtIso, tenantId);
-        return { created, scheduled };
+      if (postAction === "publish_now") {
+        const published = await publishNow(created.item.id, tenantId);
+        return { created, published, scheduled: null };
       }
 
-      return { created, scheduled: null };
+      if (postAction === "schedule") {
+        const scheduleAt = postScheduledAt ? new Date(postScheduledAt).toISOString() : new Date().toISOString();
+        const scheduled = await schedulePost(created.item.id, scheduleAt, tenantId);
+        return { created, published: null, scheduled };
+      }
+
+      return { created, published: null, scheduled: null };
     },
     onSuccess: (result) => {
-      if (result.created.backendMissing || result.scheduled?.backendMissing) {
+      if (result.created.backendMissing || result.scheduled?.backendMissing || result.published?.backendMissing) {
         setMissingEndpointNote("Backend endpoint /posts unavailable. Using local mock storage.");
       }
       queryClient.invalidateQueries({ queryKey: ["posts", tenantId] });
@@ -203,6 +249,15 @@ export function OnboardingPage(): JSX.Element {
       ) : null}
 
       <Card>
+        <div className="mb-4">
+          <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+            <span>Progress</span>
+            <span>{progressPercent}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-brand-700 transition-all" style={{ width: `${progressPercent}%` }} />
+          </div>
+        </div>
         <div className="mb-4 grid grid-cols-4 gap-2">
           {steps.map((label, index) => {
             const currentStep = index + 1;
@@ -294,6 +349,9 @@ export function OnboardingPage(): JSX.Element {
 
         {step === 3 ? (
           <div className="space-y-4">
+            <div className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-900">
+              Suggested first channel: <span className="font-semibold">LinkedIn or Website</span>. Start with Website for fastest first value.
+            </div>
             <Input
               value={channelName}
               onChange={(event) => setChannelName(event.target.value)}
@@ -316,26 +374,29 @@ export function OnboardingPage(): JSX.Element {
 
         {step === 4 ? (
           <div className="space-y-4">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              One step away from publishing. Generate your first post and choose publish now or schedule.
+            </div>
             <Input value={postTitle} onChange={(event) => setPostTitle(event.target.value)} placeholder="Post title" />
-            <textarea
-              value={postContent}
-              onChange={(event) => setPostContent(event.target.value)}
-              className="min-h-36 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Post content"
-            />
             <div className="grid gap-3 md:grid-cols-2">
+              <Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="Brand tone (e.g. confident)" />
               <select
-                value={postStatus}
-                onChange={(event) => setPostStatus(event.target.value as typeof postStatus)}
+                value={postAction}
+                onChange={(event) => {
+                  const next = event.target.value as typeof postAction;
+                  setPostAction(next);
+                }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
-                <option value="draft">draft</option>
-                <option value="scheduled">scheduled</option>
+                <option value="save_draft">Save draft</option>
+                <option value="schedule">Schedule</option>
+                <option value="publish_now">Publish now</option>
               </select>
               <Input
                 type="datetime-local"
                 value={postScheduledAt}
                 onChange={(event) => setPostScheduledAt(event.target.value)}
+                disabled={postAction !== "schedule"}
               />
             </div>
             <div className="flex justify-between">
@@ -344,10 +405,16 @@ export function OnboardingPage(): JSX.Element {
               </Button>
               <Button
                 type="button"
-                disabled={!tenantId || !postTitle.trim() || !postContent.trim() || postMutation.isPending}
+                disabled={!tenantId || !postTitle.trim() || !templatesQuery.data?.[0]?.id || postMutation.isPending}
                 onClick={() => postMutation.mutate()}
               >
-                {postMutation.isPending ? "Creating..." : "Create first post"}
+                {postMutation.isPending
+                  ? "Processing..."
+                  : postAction === "publish_now"
+                    ? "Generate and publish"
+                    : postAction === "schedule"
+                      ? "Generate and schedule"
+                      : "Generate first draft"}
               </Button>
             </div>
           </div>

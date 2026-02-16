@@ -20,6 +20,13 @@ FLAG_KEYS = [
     ("enable_tenant_publish_circuit_breaker", "Tenant-level publish pause during incidents"),
     ("maintenance_read_only_mode", "Global read-only maintenance mode"),
     ("enforce_tenant_risk_controls", "Require manual approval when tenant risk is high"),
+    ("v1_onboarding_first_value", "Guided first-value onboarding flow"),
+    ("v1_auto_project_after_signup", "Automatically create a starter project after signup"),
+    ("v1_template_library", "Template library and post-from-template flow"),
+    ("v1_smart_tooltips", "Contextual UX tooltips for first-run guidance"),
+    ("v1_plan_limit_visualization", "Usage bars and limit-aware UI controls"),
+    ("v1_subscription_lifecycle_ux", "Upgrade/downgrade/cancel billing lifecycle experience"),
+    ("v1_conversion_nudges", "Conversion-oriented contextual product nudges"),
 ]
 
 

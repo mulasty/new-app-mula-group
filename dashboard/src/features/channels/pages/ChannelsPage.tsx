@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
+import { getCurrentBilling } from "@/shared/api/billingApi";
 import { createWebsiteChannel, listChannels, listMetaConnections } from "@/shared/api/channelsApi";
 import { getConnectorOauthStartUrl, listAvailableConnectors } from "@/shared/api/connectorsApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
@@ -12,6 +13,8 @@ import { ConnectorAvailability } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
+import { SmartTooltip } from "@/shared/components/SmartTooltip";
+import { PlanUsageBars } from "@/shared/components/PlanUsageBars";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
 import { Modal } from "@/shared/components/ui/Modal";
@@ -58,6 +61,11 @@ export function ChannelsPage(): JSX.Element {
     queryKey: ["channels", tenantId, activeProjectId],
     queryFn: () => listChannels(tenantId, activeProjectId),
     enabled: Boolean(tenantId && activeProjectId),
+  });
+  const billingQuery = useQuery({
+    queryKey: ["billingCurrent", tenantId],
+    queryFn: () => getCurrentBilling(),
+    enabled: Boolean(tenantId),
   });
 
   const connectorsQuery = useQuery({
@@ -160,6 +168,8 @@ export function ChannelsPage(): JSX.Element {
       (metaConnectionsQuery.data?.instagram_accounts.length ?? 0) > 0
     );
   }, [metaConnectionsQuery.data]);
+  const connectorLimitReached =
+    (billingQuery.data?.usage.connectors_count ?? 0) >= (billingQuery.data?.plan.max_connectors ?? Number.POSITIVE_INFINITY);
 
   return (
     <div className="space-y-6">
@@ -196,6 +206,18 @@ export function ChannelsPage(): JSX.Element {
           ) : null}
 
           <Card title="Connect channel">
+            {billingQuery.data ? (
+              <div className="mb-3">
+                <PlanUsageBars billing={billingQuery.data} />
+              </div>
+            ) : null}
+            <div className="mb-3">
+              <SmartTooltip
+                id="connector-status"
+                title="Connector status"
+                message="Connected means OAuth account is available. Disabled channels stay connected but do not receive publish jobs."
+              />
+            </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto]">
               <input
                 value={channelName}
@@ -205,12 +227,15 @@ export function ChannelsPage(): JSX.Element {
               />
               <Button
                 type="button"
-                disabled={!activeProjectId || createMutation.isPending}
+                disabled={!activeProjectId || createMutation.isPending || connectorLimitReached}
                 onClick={() => createMutation.mutate()}
               >
                 {createMutation.isPending ? "Connecting..." : "Connect website channel"}
               </Button>
             </div>
+            {connectorLimitReached ? (
+              <div className="mt-2 text-xs text-amber-700">Connector limit reached for current plan.</div>
+            ) : null}
             <div className="mt-3 border-t border-slate-200 pt-3">
               <Button
                 type="button"

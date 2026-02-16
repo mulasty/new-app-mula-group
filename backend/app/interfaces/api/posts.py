@@ -11,7 +11,9 @@ from app.application.services.publishing_service import emit_publish_event, publ
 from app.application.services.audit_service import log_audit_event
 from app.application.services.billing_service import enforce_post_limit, increment_post_usage
 from app.application.services.feature_flag_service import is_feature_enabled
+from app.application.services.template_renderer import render_prompt_template
 from app.application.services.platform_ops_service import TENANT_RISK_THRESHOLD, calculate_tenant_risk_score
+from app.domain.models.content_template import ContentTemplate
 from app.domain.models.post import Post, PostStatus
 from app.domain.models.project import Project
 from app.domain.models.publish_event import PublishEvent
@@ -39,6 +41,15 @@ class PostUpdateRequest(BaseModel):
 
 class SchedulePostRequest(BaseModel):
     publish_at: datetime
+
+
+class CreateFromTemplateRequest(BaseModel):
+    project_id: UUID
+    template_id: UUID
+    variables: dict[str, str] = Field(default_factory=dict)
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    status: str = Field(default=PostStatus.DRAFT.value)
+    publish_at: datetime | None = None
 
 
 def _enforce_tenant_risk_controls(db: Session, *, tenant_id: UUID) -> None:
@@ -101,6 +112,82 @@ def create_post(
         action="post.created",
         metadata={"post_id": str(post.id), "project_id": str(post.project_id), "user_id": str(current_user.id)},
     )
+    db.commit()
+    db.refresh(post)
+    return _serialize_post(post)
+
+
+@router.post("/from-template", status_code=status.HTTP_201_CREATED)
+def create_post_from_template(
+    payload: CreateFromTemplateRequest,
+    db: Session = Depends(get_db),
+    tenant_id: UUID = Depends(require_tenant_id),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.EDITOR)),
+) -> dict:
+    enforce_post_limit(db, company_id=tenant_id)
+    project = db.execute(
+        select(Project).where(Project.id == payload.project_id, Project.company_id == tenant_id)
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    template = db.execute(
+        select(ContentTemplate).where(
+            ContentTemplate.id == payload.template_id,
+            ContentTemplate.company_id == tenant_id,
+            ContentTemplate.project_id == payload.project_id,
+        )
+    ).scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    variables = {**(payload.variables or {}), "project_name": project.name, "template_tone": template.tone}
+    generated_body = render_prompt_template(template.prompt_template, variables).strip()
+    if not generated_body:
+        generated_body = render_prompt_template(template.content_structure, variables).strip() or template.prompt_template
+
+    requested_status = payload.status or PostStatus.DRAFT.value
+    if requested_status not in {PostStatus.DRAFT.value, PostStatus.SCHEDULED.value}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft or scheduled allowed")
+
+    publish_at = payload.publish_at if payload.publish_at else None
+    if publish_at is not None and publish_at.tzinfo is None:
+        publish_at = publish_at.replace(tzinfo=UTC)
+    if requested_status == PostStatus.SCHEDULED.value and publish_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="publish_at is required for scheduled posts")
+
+    title = payload.title.strip() if payload.title else f"{project.name} | {template.name}"
+
+    post = Post(
+        company_id=tenant_id,
+        project_id=payload.project_id,
+        title=title,
+        content=generated_body,
+        status=requested_status,
+        publish_at=publish_at,
+    )
+    db.add(post)
+    db.flush()
+    increment_post_usage(db, company_id=tenant_id, amount=1)
+
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.created_from_template",
+        metadata={"post_id": str(post.id), "template_id": str(template.id), "user_id": str(current_user.id)},
+    )
+
+    if requested_status == PostStatus.SCHEDULED.value and publish_at is not None:
+        emit_publish_event(
+            db,
+            company_id=post.company_id,
+            project_id=post.project_id,
+            post_id=post.id,
+            event_type="PostScheduled",
+            status="ok",
+            metadata_json={"publish_at": publish_at.isoformat(), "source": "template"},
+        )
+
     db.commit()
     db.refresh(post)
     return _serialize_post(post)

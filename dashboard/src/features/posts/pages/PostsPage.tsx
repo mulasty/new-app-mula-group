@@ -10,6 +10,7 @@ import { ScheduleModal } from "@/features/posts/components/ScheduleModal";
 import { StatusChip } from "@/features/posts/components/StatusChip";
 import { TimelineDrawer } from "@/features/posts/components/TimelineDrawer";
 import { usePublishingWatcher } from "@/features/posts/hooks/usePublishingWatcher";
+import { getCurrentBilling } from "@/shared/api/billingApi";
 import { listWebsitePublications } from "@/shared/api/websitePublicationsApi";
 import {
   createPost,
@@ -25,6 +26,8 @@ import { listProjects } from "@/shared/api/projectsApi";
 import { ListResult, PostItem, PostStatus } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PlanUsageBars } from "@/shared/components/PlanUsageBars";
+import { SmartTooltip } from "@/shared/components/SmartTooltip";
 import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
@@ -86,6 +89,11 @@ export function PostsPage(): JSX.Element {
     queryKey: ["websitePublications", tenantId, activeProjectId],
     queryFn: () => listWebsitePublications(tenantId, activeProjectId),
     enabled: Boolean(tenantId && activeProjectId),
+  });
+  const billingQuery = useQuery({
+    queryKey: ["billingCurrent", tenantId],
+    queryFn: () => getCurrentBilling(),
+    enabled: Boolean(tenantId),
   });
 
   const timelineQuery = useQuery({
@@ -288,6 +296,9 @@ export function PostsPage(): JSX.Element {
     isEndpointMissing(updateMutation.error);
 
   const channels = channelsQuery.data?.items ?? [];
+  const postLimitReached =
+    (billingQuery.data?.usage.posts_used_current_period ?? 0) >=
+    (billingQuery.data?.plan.max_posts_per_month ?? Number.POSITIVE_INFINITY);
   const activeChannels = channels.filter((channel) => (channel.status ?? "active") !== "disabled");
   const hasActiveChannel = activeChannels.length > 0;
   const hasTextPublishingSupport = activeChannels.some(
@@ -445,6 +456,23 @@ export function PostsPage(): JSX.Element {
 
           {tab === "posts" ? (
             <Card title="Publishing console">
+              {billingQuery.data ? (
+                <div className="mb-3">
+                  <PlanUsageBars billing={billingQuery.data} />
+                </div>
+              ) : null}
+              <div className="mb-3 space-y-2">
+                <SmartTooltip
+                  id="publish-vs-schedule"
+                  title="Publish now vs Schedule"
+                  message="Publish now dispatches immediately. Schedule lets you choose a date-time and queues delivery safely."
+                />
+                <SmartTooltip
+                  id="ai-safety-flags"
+                  title="AI Safety flags"
+                  message="Failed or restricted publishes can indicate policy/risk flags. Check timeline metadata before retrying."
+                />
+              </div>
               {activeProjectId ? (
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -488,12 +516,17 @@ export function PostsPage(): JSX.Element {
                     </select>
                     <Button
                       type="button"
-                      disabled={!hasTextPublishingSupport}
+                      disabled={!hasTextPublishingSupport || postLimitReached}
                       onClick={() => setCreateModalOpen(true)}
                     >
                       Create post
                     </Button>
                   </div>
+                </div>
+              ) : null}
+              {postLimitReached ? (
+                <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  Monthly post limit reached. Upgrade to unlock more publishing volume.
                 </div>
               ) : null}
 

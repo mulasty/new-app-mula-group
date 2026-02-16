@@ -3,6 +3,7 @@ export const STORAGE_KEYS = {
   refreshToken: "cc_refresh_token",
   tenantId: "cc_tenant_id",
   onboardingState: "cc_onboarding_state",
+  onboardingStateByTenant: "cc_onboarding_state_by_tenant",
   activeProjectByTenant: "cc_active_project_by_tenant",
 };
 
@@ -35,7 +36,26 @@ export function setTenantId(tenantId: string): void {
   localStorage.setItem(STORAGE_KEYS.tenantId, tenantId);
 }
 
-export function getOnboardingState(): OnboardingStorageState {
+function getOnboardingStateMap(): Record<string, OnboardingStorageState> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.onboardingStateByTenant);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, OnboardingStorageState>;
+    return typeof parsed === "object" && parsed ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getOnboardingState(tenantId?: string | null): OnboardingStorageState {
+  if (tenantId) {
+    const mapped = getOnboardingStateMap()[tenantId];
+    if (mapped) {
+      return mapped;
+    }
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.onboardingState);
     if (!raw) {
@@ -47,7 +67,12 @@ export function getOnboardingState(): OnboardingStorageState {
   }
 }
 
-export function setOnboardingState(state: OnboardingStorageState): void {
+export function setOnboardingState(state: OnboardingStorageState, tenantId?: string | null): void {
+  if (tenantId) {
+    const map = getOnboardingStateMap();
+    map[tenantId] = state;
+    localStorage.setItem(STORAGE_KEYS.onboardingStateByTenant, JSON.stringify(map));
+  }
   localStorage.setItem(STORAGE_KEYS.onboardingState, JSON.stringify(state));
 }
 

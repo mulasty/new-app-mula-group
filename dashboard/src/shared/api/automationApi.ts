@@ -50,6 +50,9 @@ export async function listTemplates(projectId?: string): Promise<ContentTemplate
 export async function createTemplate(payload: {
   project_id: string;
   name: string;
+  category?: "product launch" | "educational" | "social proof" | "engagement" | "promotional" | string;
+  tone?: string;
+  content_structure?: string;
   template_type: "post_text" | "carousel_plan" | "video_script";
   prompt_template: string;
   output_schema_json?: Record<string, unknown>;

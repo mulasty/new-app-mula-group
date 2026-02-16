@@ -4,8 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.application.services.auth_service import AuthService
 from app.application.services.billing_service import bootstrap_company_billing
+from app.application.services.feature_flag_service import is_feature_enabled
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token
+from app.domain.models.project import Project
 from app.infrastructure.db.session import get_db
 
 router = APIRouter(tags=["signup"])
@@ -29,6 +31,14 @@ def signup(payload: SignupRequest, response: Response, db: Session = Depends(get
     access_token = create_access_token(user_id=owner.id, company_id=company.id)
     refresh_token = create_refresh_token(user_id=owner.id, company_id=company.id)
     bootstrap_company_billing(db, company_id=company.id)
+    bootstrap_project = None
+    if is_feature_enabled(db, key="v1_auto_project_after_signup", tenant_id=company.id):
+        bootstrap_project = Project(
+            company_id=company.id,
+            name=f"{company.name.strip()} Workspace",
+        )
+        db.add(bootstrap_project)
+        db.flush()
     db.commit()
 
     if settings.auth_use_httponly_cookies:
@@ -63,5 +73,13 @@ def signup(payload: SignupRequest, response: Response, db: Session = Depends(get
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
+        },
+        "onboarding_bootstrap": {
+            "project": {
+                "id": str(bootstrap_project.id),
+                "name": bootstrap_project.name,
+            }
+            if bootstrap_project is not None
+            else None
         },
     }

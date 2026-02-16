@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useTenant } from "@/app/providers/TenantProvider";
+import { useFeatureFlags } from "@/app/providers/FeatureFlagsProvider";
 import { useOnboardingStatus } from "@/features/onboarding/hooks/useOnboardingStatus";
 import { ActivityStream } from "@/features/dashboard/components/ActivityStream";
 import { AnalyticsKpiCards } from "@/features/dashboard/components/AnalyticsKpiCards";
@@ -38,6 +39,7 @@ function buildAnalyticsErrorMessage(error: unknown, fallback: string): string | 
 export function DashboardPage(): JSX.Element {
   const navigate = useNavigate();
   const { tenantId } = useTenant();
+  const { isEnabled } = useFeatureFlags();
   const {
     isOnboardingRequired,
     showSoftReminder,
@@ -135,6 +137,11 @@ export function DashboardPage(): JSX.Element {
               Utworz pierwszy post
             </Button>
           </div>
+          {isEnabled("v1_conversion_nudges") ? (
+            <div className="mt-3 rounded border border-brand-200 bg-white/60 px-3 py-2 text-xs text-brand-900">
+              You are one step away from publishing. Teams that finish onboarding publish their first campaign much faster.
+            </div>
+          ) : null}
         </Card>
       ) : !activeProjectId ? (
         <EmptyState
@@ -170,6 +177,11 @@ export function DashboardPage(): JSX.Element {
                   </Button>
                 ) : null}
               </div>
+              {isEnabled("v1_conversion_nudges") ? (
+                <div className="mt-2 text-xs text-indigo-800">
+                  Templates increase engagement by up to 35% in internal benchmarks. Try creating content from template.
+                </div>
+              ) : null}
             </Card>
           ) : null}
           <div className="flex flex-wrap gap-2">

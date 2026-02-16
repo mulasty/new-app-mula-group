@@ -18,6 +18,15 @@ type CreatePostPayload = {
   status?: PostStatus;
 };
 
+type CreatePostFromTemplatePayload = {
+  project_id: string;
+  template_id: string;
+  variables?: Record<string, string>;
+  title?: string;
+  status?: "draft" | "scheduled";
+  publish_at?: string;
+};
+
 type UpdatePostPayload = {
   title?: string;
   content?: string;
@@ -112,6 +121,36 @@ export async function createPost(payload: CreatePostPayload, tenantId: string): 
       };
       return {
         item: addMockItem(tenantId, "posts", item as PostItem),
+        source: "mock",
+        backendMissing: true,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function createPostFromTemplate(
+  payload: CreatePostFromTemplatePayload,
+  tenantId: string
+): Promise<CreateResult<PostItem>> {
+  try {
+    const response = await api.post<PostItem>("/posts/from-template", payload);
+    return { item: normalizePost(response.data), source: "api", backendMissing: false };
+  } catch (error) {
+    if (runtimeConfig.featureFlags.enableMockFallback && isEndpointMissing(error)) {
+      const item: PostItem = {
+        id: crypto.randomUUID(),
+        company_id: tenantId,
+        project_id: payload.project_id,
+        title: payload.title ?? "Template post",
+        content: `Generated from template ${payload.template_id}`,
+        status: payload.status ?? "draft",
+        publish_at: payload.publish_at ?? null,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      };
+      return {
+        item: addMockItem(tenantId, "posts", item),
         source: "mock",
         backendMissing: true,
       };
