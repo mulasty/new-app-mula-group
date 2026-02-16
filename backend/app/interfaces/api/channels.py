@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.domain.models.channel import Channel, ChannelType
 from app.domain.models.project import Project
 from app.domain.models.user import User, UserRole
+from app.application.services.audit_service import log_audit_event
+from app.application.services.billing_service import enforce_connector_limit
 from app.integrations.channel_adapters import get_adapter_capabilities
 from app.interfaces.api.deps import get_current_user, require_roles, require_tenant_id
 from app.interfaces.api.linkedin_oauth import (
@@ -101,6 +103,7 @@ def create_channel(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    enforce_connector_limit(db, company_id=tenant_id)
     if payload.type != ChannelType.WEBSITE.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only website channel is supported")
 
@@ -130,6 +133,12 @@ def create_channel(
         capabilities_json=get_adapter_capabilities(ChannelType.WEBSITE.value),
     )
     db.add(channel)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="connector.added",
+        metadata={"channel_type": channel.type, "project_id": str(channel.project_id), "user_id": str(current_user.id)},
+    )
     db.commit()
     db.refresh(channel)
     return _serialize_channel(channel)
@@ -179,6 +188,7 @@ def linkedin_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_linkedin(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_linkedin_oauth_authorization_url(
         company_id=tenant_id,
@@ -217,6 +227,7 @@ def linkedin_oauth_callback(
         state_payload = decode_linkedin_state(state)
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
+        enforce_connector_limit(db, company_id=company_id)
 
         token_payload = exchange_linkedin_code_for_tokens(code)
         access_token = token_payload.get("access_token")
@@ -245,6 +256,13 @@ def linkedin_oauth_callback(
             linkedin_member_id=linkedin_member_id,
             account_name=account_name,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": ChannelType.LINKEDIN.value, "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         reason = quote_plus(str(exc)[:200])
         return RedirectResponse(url=f"{dashboard_base}?linkedin=error&reason={reason}", status_code=302)
@@ -260,6 +278,7 @@ def meta_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_meta_oauth_authorization_url(
         company_id=tenant_id,
@@ -298,6 +317,7 @@ def meta_oauth_callback(
         state_payload = decode_meta_state(state)
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
+        enforce_connector_limit(db, company_id=company_id)
 
         short_lived_payload = exchange_code_for_user_token(code)
         short_lived_token = str(short_lived_payload.get("access_token") or "")
@@ -325,6 +345,13 @@ def meta_oauth_callback(
             pages=pages,
             instagram_accounts=instagram_accounts,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": "meta", "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         reason = quote_plus(str(exc)[:200])
         return RedirectResponse(url=f"{dashboard_base}?meta=error&reason={reason}", status_code=302)
@@ -349,6 +376,7 @@ def tiktok_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_tiktok_oauth_authorization_url(
         company_id=tenant_id,
@@ -393,6 +421,7 @@ def tiktok_oauth_callback(
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
         code_verifier = str(state_payload["code_verifier"])
+        enforce_connector_limit(db, company_id=company_id)
 
         token_payload = exchange_tiktok_code_for_tokens(code=code, code_verifier=code_verifier)
         access_token = str(token_payload.get("access_token") or "")
@@ -419,6 +448,13 @@ def tiktok_oauth_callback(
             display_name=(str(display_name).strip() if display_name else None),
             creator_info=creator_info,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": ChannelType.TIKTOK.value, "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         return RedirectResponse(
             url=build_dashboard_redirect(
@@ -443,6 +479,7 @@ def threads_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_threads_oauth_authorization_url(
         company_id=tenant_id,
@@ -485,6 +522,7 @@ def threads_oauth_callback(
         state_payload = decode_threads_state(state)
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
+        enforce_connector_limit(db, company_id=company_id)
 
         token_payload = exchange_threads_code_for_tokens(code)
         short_lived_access_token = str(token_payload.get("access_token") or "")
@@ -513,6 +551,13 @@ def threads_oauth_callback(
             refresh_token=refresh_token,
             expires_in_seconds=expires_in,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": ChannelType.THREADS.value, "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         return RedirectResponse(
             url=build_dashboard_redirect(
@@ -537,6 +582,7 @@ def x_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_x_oauth_authorization_url(
         company_id=tenant_id,
@@ -580,6 +626,7 @@ def x_oauth_callback(
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
         code_verifier = str(state_payload["code_verifier"])
+        enforce_connector_limit(db, company_id=company_id)
 
         token_payload = exchange_x_code_for_tokens(code=code, code_verifier=code_verifier)
         access_token = str(token_payload.get("access_token") or "")
@@ -604,6 +651,13 @@ def x_oauth_callback(
             refresh_token=refresh_token,
             expires_in_seconds=expires_in,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": ChannelType.X.value, "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         return RedirectResponse(
             url=build_dashboard_redirect(
@@ -628,6 +682,7 @@ def pinterest_oauth_start(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ):
+    enforce_connector_limit(db, company_id=tenant_id)
     project = resolve_project_for_meta(db, company_id=tenant_id, project_id=project_id)
     authorization_url = build_pinterest_oauth_authorization_url(
         company_id=tenant_id,
@@ -670,6 +725,7 @@ def pinterest_oauth_callback(
         state_payload = decode_pinterest_state(state)
         company_id = UUID(state_payload["company_id"])
         project_id = UUID(state_payload["project_id"])
+        enforce_connector_limit(db, company_id=company_id)
 
         token_payload = exchange_pinterest_code_for_tokens(code)
         access_token = str(token_payload.get("access_token") or "")
@@ -696,6 +752,13 @@ def pinterest_oauth_callback(
             expires_in_seconds=expires_in,
             default_board_id=default_board_id,
         )
+        log_audit_event(
+            db,
+            company_id=company_id,
+            action="connector.added",
+            metadata={"channel_type": ChannelType.PINTEREST.value, "project_id": str(project_id)},
+        )
+        db.commit()
     except Exception as exc:
         return RedirectResponse(
             url=build_dashboard_redirect(

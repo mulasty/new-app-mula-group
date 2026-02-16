@@ -30,6 +30,9 @@ Use this seeded tenant user for fast QA login:
    - `/app/projects`
    - `/app/channels`
    - `/app/posts`
+7. Open `/pricing` and verify plans render when `beta_public_pricing` enabled
+8. Open `/app/settings` and toggle feature flags
+9. If platform admin email is configured, open `/app/admin` and verify tenant list loads
 
 ## API Smoke Commands
 
@@ -42,6 +45,30 @@ curl -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: 7f855bba-10be-4410-8083-77949ba33a6b" \
   -d '{"email":"owner@test.local","password":"secret123"}'
+```
+
+## Release Preflight (Phase 7.0)
+
+Run full release readiness checks:
+
+```bash
+sh scripts/preflight_check.sh
+```
+
+Standalone smoke scripts:
+
+```bash
+sh scripts/smoke_api.sh
+sh scripts/smoke_dashboard.sh
+sh scripts/smoke_all.sh
+sh scripts/deploy.sh staging
+```
+
+## Phase 7 Backend Tests
+
+```bash
+cd backend
+pytest -q tests/test_phase7_flags_admin_ai.py
 ```
 
 ## Publishing Flow Smoke (Phase-4)

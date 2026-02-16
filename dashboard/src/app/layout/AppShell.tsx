@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/providers/AuthProvider";
+import { useFeatureFlags } from "@/app/providers/FeatureFlagsProvider";
 import { useTenant } from "@/app/providers/TenantProvider";
 import { Button } from "@/shared/components/ui/Button";
 import { Input } from "@/shared/components/ui/Input";
@@ -26,6 +27,7 @@ export function AppShell(): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { flags } = useFeatureFlags();
   const { tenantId, setTenant, discoverTenant, isTenantLoading } = useTenant();
 
   const [isTenantModalOpen, setTenantModalOpen] = useState(false);
@@ -50,6 +52,20 @@ export function AppShell(): JSX.Element {
   }, []);
 
   const tenantShort = useMemo(() => (tenantId ? `${tenantId.slice(0, 8)}...` : "Not set"), [tenantId]);
+  const isPlatformAdmin = useMemo(() => {
+    return Boolean(user?.is_platform_admin);
+  }, [user?.is_platform_admin]);
+  const nav = useMemo(() => {
+    const items = [...navItems];
+    if (isPlatformAdmin) {
+      items.splice(items.length - 2, 0, { to: "/app/admin", label: "Admin" });
+    }
+    return items;
+  }, [isPlatformAdmin]);
+  const betaFlagKeys = useMemo(
+    () => new Set(flags.filter((flag) => flag.effective_enabled).map((flag) => flag.key)),
+    [flags]
+  );
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -57,7 +73,7 @@ export function AppShell(): JSX.Element {
         <aside className="border-r border-slate-200 bg-slate-900 p-4 text-slate-200">
           <div className="mb-8 text-lg font-bold">Control Center</div>
           <nav className="space-y-1">
-            {navItems.map((item) => (
+            {nav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -66,7 +82,15 @@ export function AppShell(): JSX.Element {
                   `block rounded-md px-3 py-2 text-sm ${isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-800"}`
                 }
               >
-                {item.label}
+                <span className="inline-flex items-center gap-2">
+                  {item.label}
+                  {(item.to === "/app/admin" && betaFlagKeys.has("beta_admin_panel")) ||
+                  (item.to === "/app/content-studio" && betaFlagKeys.has("beta_ai_quality")) ? (
+                    <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
+                      BETA
+                    </span>
+                  ) : null}
+                </span>
               </NavLink>
             ))}
           </nav>
@@ -91,6 +115,11 @@ export function AppShell(): JSX.Element {
 
             <div className="flex items-center gap-3">
               <div className="text-sm text-slate-600">{user?.email ?? "unknown user"}</div>
+              {flags.length > 0 ? (
+                <div className="rounded-md bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">
+                  {flags.filter((flag) => flag.effective_enabled).length} beta
+                </div>
+              ) : null}
               <Button type="button" onClick={() => setLogoutModalOpen(true)} className="bg-slate-900 hover:bg-slate-800">
                 Logout
               </Button>
@@ -170,7 +199,7 @@ export function AppShell(): JSX.Element {
 
       <Modal open={isPaletteOpen} title="Quick navigation" onClose={() => setPaletteOpen(false)}>
         <div className="space-y-2">
-          {navItems.map((item) => (
+          {nav.map((item) => (
             <button
               key={item.to}
               type="button"

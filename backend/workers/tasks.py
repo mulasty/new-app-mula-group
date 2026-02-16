@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import select
@@ -15,12 +15,16 @@ from app.application.services.automation_service import (
     emit_automation_event,
     execute_automation_run_runtime,
 )
+from app.application.services.audit_service import log_audit_event
+from app.application.services.billing_service import reset_monthly_post_usage as reset_monthly_post_usage_service
 from app.domain.models.automation_run import AutomationRun, AutomationRunStatus
 from app.domain.models.channel import Channel
 from app.domain.models.channel_publication import ChannelPublication
 from app.domain.models.channel_retry_policy import ChannelRetryPolicy, RetryBackoffStrategy
+from app.domain.models.failed_job import FailedJob
 from app.domain.models.post import Post, PostStatus
 from app.domain.models.publish_event import PublishEvent
+from app.core.config import settings
 from app.integrations.channel_adapters import (
     AdapterAuthError,
     AdapterPermanentError,
@@ -30,6 +34,13 @@ from app.integrations.channel_adapters import (
 from app.integrations.platform_rate_limit_service import check_platform_rate_limit
 from app.infrastructure.cache.redis_client import get_redis_client
 from app.infrastructure.db.session import SessionLocal
+from app.infrastructure.observability.metrics import (
+    PUBLISH_ATTEMPTS_TOTAL,
+    PUBLISH_FAILURES_TOTAL,
+    SCHEDULED_JOBS_CHECKED_TOTAL,
+    increment_background_counter,
+    measure_redis,
+)
 from workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -37,9 +48,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_BACKOFF_STRATEGY = RetryBackoffStrategy.EXPONENTIAL.value
 DEFAULT_RETRY_DELAY_SECONDS = 30
-MAX_TASK_RETRIES = 100
+MAX_TASK_RETRIES = 5
 MAX_CONCURRENT_CHANNEL_PUBLISHES = 5
 AUTOMATION_MAX_RETRIES = 5
+PUBLISH_LOCK_TTL_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -59,6 +71,16 @@ class ChannelPublishResult:
     publish_duration_ms: int
     metadata: dict
     error: str | None = None
+
+
+def _record_failed_job(db, *, job_type: str, payload: dict, error_message: str) -> None:
+    db.add(
+        FailedJob(
+            job_type=job_type,
+            payload=payload,
+            error_message=error_message,
+        )
+    )
 
 
 def _get_existing_channel_publication(
@@ -114,6 +136,36 @@ def _compute_retry_delay_seconds(policy: RetryPolicyConfig, attempt: int) -> int
     if policy.backoff_strategy == RetryBackoffStrategy.LINEAR.value:
         return policy.retry_delay_seconds * normalized_attempt
     return policy.retry_delay_seconds * (2 ** (normalized_attempt - 1))
+
+
+def _acquire_publish_lock(redis_client, *, post_id: UUID) -> str | None:
+    lock_key = f"lock:publish:{post_id}"
+    token = str(uuid4())
+    with measure_redis("publish_lock_acquire"):
+        acquired = redis_client.set(lock_key, token, nx=True, ex=PUBLISH_LOCK_TTL_SECONDS)
+    if not acquired:
+        return None
+    return token
+
+
+def _release_publish_lock(redis_client, *, post_id: UUID, token: str) -> None:
+    lock_key = f"lock:publish:{post_id}"
+    try:
+        with measure_redis("publish_lock_release"):
+            redis_client.eval(
+                """
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    return redis.call("del", KEYS[1])
+                else
+                    return 0
+                end
+                """,
+                1,
+                lock_key,
+                token,
+            )
+    except Exception:
+        logger.exception("publish_lock_release_failed post_id=%s", post_id)
 
 
 async def _publish_channel(
@@ -353,6 +405,33 @@ def ping() -> str:
     return "pong"
 
 
+@celery_app.task(name="workers.tasks.analytics_ping")
+def analytics_ping() -> dict:
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+
+
+@celery_app.task(name="workers.tasks.worker_heartbeat")
+def worker_heartbeat() -> dict:
+    redis_client = get_redis_client()
+    now = datetime.now(UTC).isoformat()
+    with measure_redis("worker_heartbeat_set"):
+        redis_client.set(
+            settings.worker_heartbeat_key,
+            now,
+            ex=max(15, settings.worker_heartbeat_ttl_seconds),
+        )
+    return {"heartbeat_at": now}
+
+
+@celery_app.task(name="workers.tasks.reset_monthly_post_usage")
+def reset_monthly_post_usage() -> dict:
+    with SessionLocal() as db:
+        affected = reset_monthly_post_usage_service(db)
+        db.commit()
+    logger.info("monthly_post_usage_reset completed affected=%s", affected)
+    return {"affected_companies": affected}
+
+
 @celery_app.task(name="workers.tasks.schedule_due_posts")
 def schedule_due_posts() -> dict:
     now = datetime.now(UTC)
@@ -360,16 +439,19 @@ def schedule_due_posts() -> dict:
 
     with SessionLocal() as db:
         due_posts = db.execute(
-            select(Post).where(
+            select(Post)
+            .where(
                 Post.status == PostStatus.SCHEDULED.value,
                 Post.publish_at.is_not(None),
                 Post.publish_at <= now,
             )
+            .order_by(Post.publish_at.asc())
+            .limit(500)
         ).scalars().all()
+        SCHEDULED_JOBS_CHECKED_TOTAL.inc(len(due_posts))
+        increment_background_counter("scheduled_jobs_checked_total", len(due_posts))
 
         for post in due_posts:
-            post.status = PostStatus.PUBLISHING.value
-            post.last_error = None
             emit_publish_event(
                 db,
                 company_id=post.company_id,
@@ -377,7 +459,10 @@ def schedule_due_posts() -> dict:
                 post_id=post.id,
                 event_type="PostPublishingStarted",
                 status="ok",
-                metadata_json={"source": "scheduler"},
+                metadata_json={
+                    "source": "scheduler",
+                    "query_hint": "status=scheduled AND publish_at<=now ORDER BY publish_at ASC LIMIT 500",
+                },
             )
             publish_post_async(post.company_id, post.id)
             enqueued += 1
@@ -518,145 +603,53 @@ def execute_automation_run(self, run_id: str) -> dict:
 
 @celery_app.task(bind=True, name="workers.tasks.publish_post", max_retries=MAX_TASK_RETRIES, acks_late=True)
 def publish_post(self, company_id: str, post_id: str) -> dict:
+    PUBLISH_ATTEMPTS_TOTAL.inc()
+    increment_background_counter("publish_attempts_total")
     company_uuid = UUID(company_id)
     post_uuid = UUID(post_id)
     attempt = self.request.retries + 1
+    redis_client = get_redis_client()
+    lock_token = _acquire_publish_lock(redis_client, post_id=post_uuid)
+    if lock_token is None:
+        logger.info("publish_post_skipped_locked company_id=%s post_id=%s", company_id, post_id)
+        return {"status": "skipped", "reason": "lock_not_acquired"}
 
-    with SessionLocal() as db:
-        post = db.execute(
-            select(Post).where(Post.id == post_uuid, Post.company_id == company_uuid)
-        ).scalar_one_or_none()
-        if post is None:
-            logger.warning("publish_post_not_found company_id=%s post_id=%s", company_id, post_id)
-            return {"status": "missing"}
+    try:
+        with SessionLocal() as db:
+            post = db.execute(
+                select(Post).where(Post.id == post_uuid, Post.company_id == company_uuid)
+            ).scalar_one_or_none()
+            if post is None:
+                logger.warning("publish_post_not_found company_id=%s post_id=%s", company_id, post_id)
+                return {"status": "missing"}
 
-        allowed_states = {
-            PostStatus.PUBLISHING.value,
-            PostStatus.SCHEDULED.value,
-            PostStatus.PUBLISHED_PARTIAL.value,
-            PostStatus.FAILED.value,
-        }
-        if post.status not in allowed_states:
-            logger.info(
-                "publish_post_skip_invalid_state company_id=%s post_id=%s status=%s",
-                company_id,
-                post_id,
-                post.status,
-            )
-            return {"status": "skipped", "post_status": post.status}
+            if post.status == PostStatus.PUBLISHED.value:
+                logger.info("publish_post_skip_already_published company_id=%s post_id=%s", company_id, post_id)
+                return {"status": "skipped", "reason": "already_published"}
 
-        channels = get_active_channels(db, company_id=company_uuid, project_id=post.project_id)
-        if not channels:
-            post.status = PostStatus.FAILED.value
-            post.last_error = "No active channels found for project"
-            emit_publish_event(
-                db,
-                company_id=post.company_id,
-                project_id=post.project_id,
-                post_id=post.id,
-                event_type="PostPublishFailed",
-                status="error",
-                attempt=attempt,
-                metadata_json={"error": post.last_error},
-            )
+            if post.status == PostStatus.PUBLISHING.value:
+                logger.info("publish_post_skip_in_progress company_id=%s post_id=%s", company_id, post_id)
+                return {"status": "skipped", "reason": "already_publishing"}
+
+            if post.status not in {PostStatus.SCHEDULED.value, PostStatus.DRAFT.value}:
+                logger.info(
+                    "publish_post_skip_invalid_state company_id=%s post_id=%s status=%s",
+                    company_id,
+                    post_id,
+                    post.status,
+                )
+                return {"status": "skipped", "post_status": post.status}
+
+            post.status = PostStatus.PUBLISHING.value
+            post.last_error = None
             db.commit()
-            return {"status": "failed", "error": post.last_error}
 
-        successful_channel_ids = set(
-            db.execute(
-                select(PublishEvent.channel_id).where(
-                    PublishEvent.company_id == company_uuid,
-                    PublishEvent.post_id == post_uuid,
-                    PublishEvent.channel_id.is_not(None),
-                    PublishEvent.event_type == "ChannelPublishSucceeded",
-                    PublishEvent.status == "ok",
-                )
-            ).scalars().all()
-        )
-
-        pending_channels = [channel for channel in channels if channel.id not in successful_channel_ids]
-        policies = _load_retry_policies(db, {channel.type for channel in pending_channels})
-
-        publish_results: list[ChannelPublishResult] = []
-        if pending_channels:
-            publish_results = asyncio.run(
-                _publish_channels_batch(
-                    company_id=company_uuid,
-                    post_id=post_uuid,
-                    channels=pending_channels,
-                    attempt=attempt,
-                    policies=policies,
-                )
-            )
-
-        success_count = len(successful_channel_ids) + sum(1 for result in publish_results if result.success)
-        failed_results = [result for result in publish_results if not result.success]
-
-        for result in publish_results:
-            metadata = {
-                "channel_type": result.channel_type,
-                "platform": result.channel_type,
-                "adapter_type": result.adapter_type,
-                "publish_duration_ms": result.publish_duration_ms,
-                "publish_latency_ms": result.publish_duration_ms,
-                "retry_count": max(0, attempt - 1),
-                "success": result.success,
-                "retryable": result.retryable,
-                **(result.metadata or {}),
-            }
-            if result.error:
-                metadata["error"] = result.error
-            emit_publish_event(
-                db,
-                company_id=post.company_id,
-                project_id=post.project_id,
-                post_id=post.id,
-                channel_id=result.channel_id,
-                event_type="ChannelPublishSucceeded" if result.success else "ChannelPublishFailed",
-                status="ok" if result.success else "error",
-                attempt=attempt,
-                metadata_json=metadata,
-            )
-            if result.metadata.get("channel_auth_failed"):
-                emit_publish_event(
-                    db,
-                    company_id=post.company_id,
-                    project_id=post.project_id,
-                    post_id=post.id,
-                    channel_id=result.channel_id,
-                    event_type="ChannelAuthFailed",
-                    status="error",
-                    attempt=attempt,
-                    metadata_json=metadata,
-                )
-
-        channels_total = len(channels)
-        summary_metadata = {
-            "channels_total": channels_total,
-            "channels_success": success_count,
-            "channels_failed": len(failed_results),
-            "attempt": attempt,
-        }
-
-        if failed_results:
-            error_summary = "; ".join(
-                f"{result.channel_type}:{result.error or 'unknown'}" for result in failed_results
-            )
-            post.last_error = error_summary
-            if success_count > 0:
-                post.status = PostStatus.PUBLISHED_PARTIAL.value
-                emit_publish_event(
-                    db,
-                    company_id=post.company_id,
-                    project_id=post.project_id,
-                    post_id=post.id,
-                    event_type="PostPublishedPartial",
-                    status="error",
-                    attempt=attempt,
-                    metadata_json={**summary_metadata, "error": error_summary},
-                )
-            else:
+            channels = get_active_channels(db, company_id=company_uuid, project_id=post.project_id)
+            if not channels:
+                PUBLISH_FAILURES_TOTAL.inc()
+                increment_background_counter("publish_failures_total")
                 post.status = PostStatus.FAILED.value
+                post.last_error = "No active channels found for project"
                 emit_publish_event(
                     db,
                     company_id=post.company_id,
@@ -665,62 +658,228 @@ def publish_post(self, company_id: str, post_id: str) -> dict:
                     event_type="PostPublishFailed",
                     status="error",
                     attempt=attempt,
-                    metadata_json={**summary_metadata, "error": error_summary},
+                    metadata_json={"error": post.last_error},
                 )
-        else:
-            post.status = PostStatus.PUBLISHED.value
-            post.last_error = None
-            emit_publish_event(
-                db,
-                company_id=post.company_id,
-                project_id=post.project_id,
-                post_id=post.id,
-                event_type="PostPublished",
-                status="ok",
-                attempt=attempt,
-                metadata_json=summary_metadata,
+                _record_failed_job(
+                    db,
+                    job_type="publish_post",
+                    payload={"company_id": company_id, "post_id": post_id, "reason": "no_active_channels"},
+                    error_message=post.last_error,
+                )
+                db.commit()
+                return {"status": "failed", "error": post.last_error}
+
+            successful_channel_ids = set(
+                db.execute(
+                    select(PublishEvent.channel_id).where(
+                        PublishEvent.company_id == company_uuid,
+                        PublishEvent.post_id == post_uuid,
+                        PublishEvent.channel_id.is_not(None),
+                        PublishEvent.event_type == "ChannelPublishSucceeded",
+                        PublishEvent.status == "ok",
+                    )
+                ).scalars().all()
             )
 
-        db.commit()
+            pending_channels = [channel for channel in channels if channel.id not in successful_channel_ids]
+            policies = _load_retry_policies(db, {channel.type for channel in pending_channels})
 
-        retryable_failures = [result for result in failed_results if result.retryable]
-        if retryable_failures:
-            delays = []
-            for result in retryable_failures:
-                policy = policies.get(result.channel_type, _default_retry_policy())
-                delays.append(_compute_retry_delay_seconds(policy, attempt))
-            retry_countdown = max(1, min(delays)) if delays else DEFAULT_RETRY_DELAY_SECONDS
-            logger.warning(
-                "publish_post_retry_scheduled company_id=%s post_id=%s attempt=%s countdown=%s failed_channels=%s",
+            publish_results: list[ChannelPublishResult] = []
+            if pending_channels:
+                publish_results = asyncio.run(
+                    _publish_channels_batch(
+                        company_id=company_uuid,
+                        post_id=post_uuid,
+                        channels=pending_channels,
+                        attempt=attempt,
+                        policies=policies,
+                    )
+                )
+
+            success_count = len(successful_channel_ids) + sum(1 for result in publish_results if result.success)
+            failed_results = [result for result in publish_results if not result.success]
+
+            for result in publish_results:
+                metadata = {
+                    "channel_type": result.channel_type,
+                    "platform": result.channel_type,
+                    "adapter_type": result.adapter_type,
+                    "publish_duration_ms": result.publish_duration_ms,
+                    "publish_latency_ms": result.publish_duration_ms,
+                    "retry_count": max(0, attempt - 1),
+                    "success": result.success,
+                    "retryable": result.retryable,
+                    **(result.metadata or {}),
+                }
+                if result.error:
+                    metadata["error"] = result.error
+                emit_publish_event(
+                    db,
+                    company_id=post.company_id,
+                    project_id=post.project_id,
+                    post_id=post.id,
+                    channel_id=result.channel_id,
+                    event_type="ChannelPublishSucceeded" if result.success else "ChannelPublishFailed",
+                    status="ok" if result.success else "error",
+                    attempt=attempt,
+                    metadata_json=metadata,
+                )
+                if result.metadata.get("channel_auth_failed"):
+                    emit_publish_event(
+                        db,
+                        company_id=post.company_id,
+                        project_id=post.project_id,
+                        post_id=post.id,
+                        channel_id=result.channel_id,
+                        event_type="ChannelAuthFailed",
+                        status="error",
+                        attempt=attempt,
+                        metadata_json=metadata,
+                    )
+
+            channels_total = len(channels)
+            summary_metadata = {
+                "channels_total": channels_total,
+                "channels_success": success_count,
+                "channels_failed": len(failed_results),
+                "attempt": attempt,
+            }
+
+            if failed_results:
+                PUBLISH_FAILURES_TOTAL.inc()
+                increment_background_counter("publish_failures_total")
+                error_summary = "; ".join(
+                    f"{result.channel_type}:{result.error or 'unknown'}" for result in failed_results
+                )
+                post.last_error = error_summary
+                if success_count > 0:
+                    post.status = PostStatus.PUBLISHED_PARTIAL.value
+                    emit_publish_event(
+                        db,
+                        company_id=post.company_id,
+                        project_id=post.project_id,
+                        post_id=post.id,
+                        event_type="PostPublishedPartial",
+                        status="error",
+                        attempt=attempt,
+                        metadata_json={**summary_metadata, "error": error_summary},
+                    )
+                else:
+                    post.status = PostStatus.FAILED.value
+                    emit_publish_event(
+                        db,
+                        company_id=post.company_id,
+                        project_id=post.project_id,
+                        post_id=post.id,
+                        event_type="PostPublishFailed",
+                        status="error",
+                        attempt=attempt,
+                        metadata_json={**summary_metadata, "error": error_summary},
+                    )
+            else:
+                post.status = PostStatus.PUBLISHED.value
+                post.last_error = None
+                emit_publish_event(
+                    db,
+                    company_id=post.company_id,
+                    project_id=post.project_id,
+                    post_id=post.id,
+                    event_type="PostPublished",
+                    status="ok",
+                    attempt=attempt,
+                    metadata_json=summary_metadata,
+                )
+
+            db.commit()
+
+            retryable_failures = [result for result in failed_results if result.retryable]
+            if retryable_failures:
+                delays = []
+                for result in retryable_failures:
+                    policy = policies.get(result.channel_type, _default_retry_policy())
+                    delays.append(_compute_retry_delay_seconds(policy, attempt))
+                retry_countdown = max(1, min(delays)) if delays else DEFAULT_RETRY_DELAY_SECONDS
+                retry_countdown = max(retry_countdown, min(1800, 30 * (2 ** (attempt - 1))))
+
+                # Requeue through scheduler-safe state transition.
+                post.status = PostStatus.SCHEDULED.value
+                db.commit()
+
+                logger.warning(
+                    "publish_post_retry_scheduled company_id=%s post_id=%s attempt=%s countdown=%s failed_channels=%s",
+                    company_id,
+                    post_id,
+                    attempt,
+                    retry_countdown,
+                    ",".join(sorted({result.channel_type for result in retryable_failures})),
+                )
+                try:
+                    raise self.retry(
+                        exc=RuntimeError("One or more channels failed and are retryable"),
+                        countdown=retry_countdown,
+                    )
+                except MaxRetriesExceededError:
+                    logger.exception(
+                        "publish_post_max_retries company_id=%s post_id=%s", company_id, post_id
+                    )
+                    post.status = PostStatus.FAILED.value
+                    _record_failed_job(
+                        db,
+                        job_type="publish_post",
+                        payload={"company_id": company_id, "post_id": post_id, "attempt": attempt},
+                        error_message=post.last_error or "Max retries exceeded",
+                    )
+                    db.commit()
+                    return {"status": post.status, "error": post.last_error}
+
+            if post.status == PostStatus.FAILED.value:
+                log_audit_event(
+                    db,
+                    company_id=post.company_id,
+                    action="publish.failed",
+                    metadata={
+                        "post_id": str(post.id),
+                        "project_id": str(post.project_id),
+                        "attempt": attempt,
+                        "last_error": post.last_error,
+                    },
+                )
+                _record_failed_job(
+                    db,
+                    job_type="publish_post",
+                    payload={"company_id": company_id, "post_id": post_id, "attempt": attempt},
+                    error_message=post.last_error or "Publish failed",
+                )
+                db.commit()
+
+            logger.info(
+                "publish_post_completed company_id=%s post_id=%s project_id=%s status=%s channels_success=%s channels_failed=%s",
                 company_id,
                 post_id,
-                attempt,
-                retry_countdown,
-                ",".join(sorted({result.channel_type for result in retryable_failures})),
+                post.project_id,
+                post.status,
+                success_count,
+                len(failed_results),
             )
-            try:
-                raise self.retry(
-                    exc=RuntimeError("One or more channels failed and are retryable"),
-                    countdown=retry_countdown,
+            if post.status in {PostStatus.PUBLISHED.value, PostStatus.PUBLISHED_PARTIAL.value}:
+                log_audit_event(
+                    db,
+                    company_id=post.company_id,
+                    action="publish.completed",
+                    metadata={
+                        "post_id": str(post.id),
+                        "project_id": str(post.project_id),
+                        "status": post.status,
+                        "channels_success": success_count,
+                        "channels_failed": len(failed_results),
+                    },
                 )
-            except MaxRetriesExceededError:
-                logger.exception(
-                    "publish_post_max_retries company_id=%s post_id=%s", company_id, post_id
-                )
-                return {"status": post.status, "error": post.last_error}
-
-        logger.info(
-            "publish_post_completed company_id=%s post_id=%s project_id=%s status=%s channels_success=%s channels_failed=%s",
-            company_id,
-            post_id,
-            post.project_id,
-            post.status,
-            success_count,
-            len(failed_results),
-        )
-        return {
-            "status": post.status,
-            "channels_total": channels_total,
-            "channels_success": success_count,
-            "channels_failed": len(failed_results),
-        }
+                db.commit()
+            return {
+                "status": post.status,
+                "channels_total": channels_total,
+                "channels_success": success_count,
+                "channels_failed": len(failed_results),
+            }
+    finally:
+        _release_publish_lock(redis_client, post_id=post_uuid, token=lock_token)

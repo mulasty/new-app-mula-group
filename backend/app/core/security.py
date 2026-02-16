@@ -1,7 +1,7 @@
 import base64
 import hashlib
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
@@ -34,6 +34,7 @@ def _create_token(user_id: UUID, company_id: UUID, expires_minutes: int, token_t
         "company_id": str(company_id),
         "exp": expire,
         "type": token_type,
+        "jti": str(uuid4()),
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
@@ -48,6 +49,14 @@ def create_refresh_token(user_id: UUID, company_id: UUID) -> str:
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+
+
+def get_token_identifier(token: str, claims: dict | None = None) -> str:
+    payload = claims or decode_token(token)
+    token_id = payload.get("jti")
+    if isinstance(token_id, str) and token_id.strip():
+        return token_id
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def encrypt_secret(secret: str) -> str:

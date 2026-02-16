@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.application.services.auth_service import AuthService
+from app.application.services.billing_service import bootstrap_company_billing
+from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token
 from app.infrastructure.db.session import get_db
 
@@ -16,7 +18,7 @@ class SignupRequest(BaseModel):
 
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> dict:
+def signup(payload: SignupRequest, response: Response, db: Session = Depends(get_db)) -> dict:
     company, owner, subscription = AuthService.signup_tenant(
         db,
         company_name=payload.company_name,
@@ -26,6 +28,20 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> dict:
 
     access_token = create_access_token(user_id=owner.id, company_id=company.id)
     refresh_token = create_refresh_token(user_id=owner.id, company_id=company.id)
+    bootstrap_company_billing(db, company_id=company.id)
+    db.commit()
+
+    if settings.auth_use_httponly_cookies:
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=settings.auth_cookie_secure,
+            samesite=settings.auth_cookie_samesite,
+            domain=settings.auth_cookie_domain,
+            max_age=settings.jwt_access_token_expire_minutes * 60,
+            path="/",
+        )
 
     return {
         "company": {

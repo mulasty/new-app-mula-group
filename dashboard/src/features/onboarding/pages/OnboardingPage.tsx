@@ -5,9 +5,11 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
 import { useOnboardingStatus } from "@/features/onboarding/hooks/useOnboardingStatus";
+import { createCheckoutSession } from "@/shared/api/billingApi";
 import { createWebsiteChannel } from "@/shared/api/channelsApi";
 import { createPost, schedulePost } from "@/shared/api/postsApi";
 import { createProject } from "@/shared/api/projectsApi";
+import { createCampaign, createTemplate } from "@/shared/api/automationApi";
 import { PostStatus } from "@/shared/api/types";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
@@ -34,6 +36,7 @@ export function OnboardingPage(): JSX.Element {
   } = useOnboardingStatus();
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPlan = searchParams.get("plan");
   const stepFromQuery = Number(searchParams.get("step") ?? "0");
   const step = useMemo(() => {
     if (stepFromQuery >= 1 && stepFromQuery <= 4) {
@@ -85,11 +88,31 @@ export function OnboardingPage(): JSX.Element {
 
   const projectMutation = useMutation({
     mutationFn: () => createProject(projectName.trim(), tenantId),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       if (result.backendMissing) {
         setMissingEndpointNote("Backend endpoint /projects unavailable. Using local mock storage.");
       }
       setProjectIdDraft(result.item.id);
+      try {
+        await createCampaign({
+          project_id: result.item.id,
+          name: "Default campaign",
+          description: "Autocreated during onboarding",
+          brand_profile_json: { voice: "professional", cta: "Book a demo" },
+        });
+        await createTemplate({
+          project_id: result.item.id,
+          name: "Default post template",
+          template_type: "post_text",
+          prompt_template: "Napisz post o {{topic}} dla {{brand.voice}} i dodaj CTA {{offer}}.",
+          output_schema_json: {
+            type: "object",
+            required: ["title", "body", "hashtags", "cta", "channels", "risk_flags"],
+          },
+        });
+      } catch {
+        // Optional bootstrap assets can fail when endpoints are not available.
+      }
       queryClient.invalidateQueries({ queryKey: ["projects", tenantId] });
       setProjectName("");
       setStep(3);
@@ -138,6 +161,18 @@ export function OnboardingPage(): JSX.Element {
     },
   });
 
+  const checkoutMutation = useMutation({
+    mutationFn: () => createCheckoutSession(selectedPlan || "Pro"),
+    onSuccess: (payload) => {
+      if (payload.checkout_url) {
+        window.location.assign(payload.checkout_url);
+      } else {
+        pushToast("Checkout not available for this environment.", "error");
+      }
+    },
+    onError: () => pushToast("Failed to start checkout", "error"),
+  });
+
   const steps = ["Tenant", "Project", "Channel", "Post"];
 
   return (
@@ -146,9 +181,16 @@ export function OnboardingPage(): JSX.Element {
         title="Onboarding"
         description="Skonfiguruj tenant i utworz pierwsze zasoby, aby szybciej osiagnac first value."
         actions={
-          <Button type="button" className="bg-slate-700 hover:bg-slate-600" onClick={onSkip}>
-            Skip for now
-          </Button>
+          <div className="flex items-center gap-2">
+            {selectedPlan ? (
+              <Button type="button" onClick={() => checkoutMutation.mutate()} disabled={checkoutMutation.isPending}>
+                {checkoutMutation.isPending ? "Redirecting..." : `Activate ${selectedPlan}`}
+              </Button>
+            ) : null}
+            <Button type="button" className="bg-slate-700 hover:bg-slate-600" onClick={onSkip}>
+              Skip for now
+            </Button>
+          </div>
         }
       />
 

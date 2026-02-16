@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: install-dev seed test lint format dashboard-install dashboard-build dashboard-lint dashboard-test
+.PHONY: install-dev seed test lint format dashboard-install dashboard-build dashboard-lint dashboard-test smoke preflight deploy-staging deploy-prod
 
 install-dev:
 	cd backend && pip install -r requirements.txt -r requirements-dev.txt
@@ -28,3 +28,15 @@ dashboard-lint:
 
 dashboard-test:
 	cd dashboard && npm run build
+
+smoke:
+	sh scripts/smoke_all.sh
+
+preflight:
+	sh scripts/preflight_check.sh
+
+deploy-staging:
+	bash scripts/deploy.sh staging
+
+deploy-prod:
+	bash scripts/deploy.sh production

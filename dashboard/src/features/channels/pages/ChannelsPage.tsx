@@ -342,6 +342,8 @@ export function ChannelsPage(): JSX.Element {
             open={connectorModalOpen}
             title="Connect platform"
             onClose={() => setConnectorModalOpen(false)}
+            maxWidthClassName="max-w-3xl"
+            bodyClassName="max-h-[70vh]"
           >
             {connectorsQuery.isLoading ? (
               <div className="flex items-center gap-2 text-sm text-slate-600">

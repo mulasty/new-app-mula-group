@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { z } from "zod";
 
 import { useAuth } from "@/app/providers/AuthProvider";
@@ -42,6 +42,7 @@ type RegisterValues = z.infer<typeof registerSchema>;
 
 export function AuthPage(): JSX.Element {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { pushToast } = useToast();
   const { loginWithPassword, registerUser } = useAuth();
   const { tenantId, setTenant } = useTenant();
@@ -64,6 +65,7 @@ export function AuthPage(): JSX.Element {
   const [loginErrors, setLoginErrors] = useState<Partial<Record<keyof LoginValues, string>>>({});
   const [registerErrors, setRegisterErrors] = useState<Partial<Record<keyof RegisterValues, string>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const requestedPlan = searchParams.get("plan");
 
   useEffect(() => {
     if (!tenantId) {
@@ -93,7 +95,7 @@ export function AuthPage(): JSX.Element {
     try {
       setTenant(parsed.data.tenantId);
       await loginWithPassword(parsed.data.email, parsed.data.password);
-      navigate("/app");
+      navigate(requestedPlan ? `/app/onboarding?plan=${encodeURIComponent(requestedPlan)}` : "/app");
     } catch (error) {
       pushToast(getApiErrorMessage(error, "Login failed"), "error");
     } finally {
@@ -128,7 +130,7 @@ export function AuthPage(): JSX.Element {
       );
       setTenant(createdTenantId);
       await loginWithPassword(parsed.data.email, parsed.data.password);
-      navigate("/app");
+      navigate(requestedPlan ? `/app/onboarding?plan=${encodeURIComponent(requestedPlan)}` : "/app");
     } catch (error) {
       pushToast(getApiErrorMessage(error, "Registration failed"), "error");
     } finally {

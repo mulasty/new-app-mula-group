@@ -18,12 +18,31 @@ class Settings(BaseSettings):
 
     database_url: str | None = None
     redis_url: str | None = None
+    frontend_origin: str = "http://localhost:3000"
+    additional_frontend_origins: str = ""
+    tenant_rate_limit_per_minute: int = 120
+    worker_heartbeat_key: str = "worker:heartbeat"
+    worker_heartbeat_ttl_seconds: int = 45
 
     jwt_secret_key: str = "change_this_in_production"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
     jwt_refresh_token_expire_minutes: int = 10080
     token_encryption_key: str | None = None
+    auth_use_httponly_cookies: bool = False
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "strict"
+    auth_cookie_domain: str | None = None
+
+    stripe_api_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_checkout_success_url: str = "http://localhost:3000/app/onboarding?checkout=success"
+    stripe_checkout_cancel_url: str = "http://localhost:3000/pricing?checkout=cancelled"
+    stripe_price_id_starter: str | None = None
+    stripe_price_id_pro: str | None = None
+    stripe_price_id_enterprise: str | None = None
+    feature_flag_cache_ttl_seconds: int = 60
+    platform_admin_emails: str = ""
 
     linkedin_client_id: str | None = None
     linkedin_client_secret: str | None = None
@@ -67,6 +86,25 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: float = 30.0
     openai_temperature: float = 0.2
+
+    @property
+    def platform_admin_email_list(self) -> list[str]:
+        if not self.platform_admin_emails.strip():
+            return []
+        return [value.strip().lower() for value in self.platform_admin_emails.split(",") if value.strip()]
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        origins = [self.frontend_origin.strip(), self.public_app_url.strip()]
+        if self.additional_frontend_origins.strip():
+            origins.extend(
+                [value.strip() for value in self.additional_frontend_origins.split(",") if value.strip()]
+            )
+        unique: list[str] = []
+        for origin in origins:
+            if origin and origin not in unique:
+                unique.append(origin)
+        return unique
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

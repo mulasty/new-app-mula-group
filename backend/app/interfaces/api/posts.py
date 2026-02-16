@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.services.publishing_service import emit_publish_event, publish_post_async
+from app.application.services.audit_service import log_audit_event
+from app.application.services.billing_service import enforce_post_limit, increment_post_usage
 from app.domain.models.post import Post, PostStatus
 from app.domain.models.project import Project
 from app.domain.models.publish_event import PublishEvent
@@ -59,6 +61,7 @@ def create_post(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.EDITOR)),
 ) -> dict:
+    enforce_post_limit(db, company_id=tenant_id)
     project = db.execute(
         select(Project).where(Project.id == payload.project_id, Project.company_id == tenant_id)
     ).scalar_one_or_none()
@@ -77,6 +80,14 @@ def create_post(
         status=PostStatus.DRAFT.value,
     )
     db.add(post)
+    db.flush()
+    increment_post_usage(db, company_id=tenant_id, amount=1)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.created",
+        metadata={"post_id": str(post.id), "project_id": str(post.project_id), "user_id": str(current_user.id)},
+    )
     db.commit()
     db.refresh(post)
     return _serialize_post(post)
@@ -197,6 +208,12 @@ def publish_now(
         metadata_json={"publish_at": now.isoformat()},
     )
     db.add(post)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="post.publish_now_requested",
+        metadata={"post_id": str(post.id), "project_id": str(post.project_id), "user_id": str(current_user.id)},
+    )
     db.commit()
     db.refresh(post)
 

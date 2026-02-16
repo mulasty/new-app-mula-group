@@ -25,6 +25,7 @@ export type TokenResponse = {
     company_id: string;
     email: string;
     role?: string;
+    is_platform_admin?: boolean;
   };
 };
 
@@ -33,6 +34,7 @@ export type MeResponse = {
   company_id: string;
   email: string;
   role?: string;
+  is_platform_admin?: boolean;
 };
 
 export type TenantContextResponse = {
@@ -289,4 +291,54 @@ export type CalendarPayload = {
     created_at: string;
     scheduled_for?: string | null;
   }>;
+};
+
+export type FeatureFlagItem = {
+  id: string;
+  key: string;
+  description?: string | null;
+  enabled_globally: boolean;
+  enabled_for_tenant: boolean;
+  effective_enabled: boolean;
+  updated_at: string;
+};
+
+export type BillingPlan = {
+  id: string;
+  name: string;
+  monthly_price: number;
+  max_projects: number;
+  max_posts_per_month: number;
+  max_connectors: number;
+};
+
+export type BillingSnapshot = {
+  subscription: {
+    id: string;
+    status: string;
+    current_period_end?: string | null;
+    stripe_customer_id?: string | null;
+    stripe_subscription_id?: string | null;
+  };
+  plan: BillingPlan;
+  usage: {
+    posts_used_current_period: number;
+  };
+};
+
+export type AdminTenantItem = {
+  company_id: string;
+  name: string;
+  slug: string;
+  subscription_status: string;
+  posts_used_current_period: number;
+  published_posts: number;
+};
+
+export type AdminAuditLogItem = {
+  id: string;
+  company_id: string;
+  action: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
 };

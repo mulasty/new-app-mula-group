@@ -5,8 +5,10 @@ import { useNavigate } from "react-router-dom";
 import { useTenant } from "@/app/providers/TenantProvider";
 import { useToast } from "@/app/providers/ToastProvider";
 import { me } from "@/shared/api/authApi";
+import { getCurrentBilling } from "@/shared/api/billingApi";
 import { getConnectorOauthStartUrl, listAvailableConnectors } from "@/shared/api/connectorsApi";
 import { getApiErrorMessage } from "@/shared/api/errors";
+import { listFeatureFlags, patchFeatureFlag } from "@/shared/api/featureFlagsApi";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { Button } from "@/shared/components/ui/Button";
 import { Card } from "@/shared/components/ui/Card";
@@ -25,6 +27,16 @@ export function SettingsPage(): JSX.Element {
     queryFn: () => listAvailableConnectors(),
     enabled: Boolean(tenantId),
   });
+  const flagsQuery = useQuery({
+    queryKey: ["settingsFeatureFlags", tenantId],
+    queryFn: () => listFeatureFlags(),
+    enabled: Boolean(tenantId),
+  });
+  const billingQuery = useQuery({
+    queryKey: ["billingCurrent", tenantId],
+    queryFn: () => getCurrentBilling(),
+    enabled: Boolean(tenantId),
+  });
 
   const oauthMutation = useMutation({
     mutationFn: (platform: string) => getConnectorOauthStartUrl(platform),
@@ -34,6 +46,15 @@ export function SettingsPage(): JSX.Element {
     onError: (error) => {
       pushToast(getApiErrorMessage(error, "Failed to start connector OAuth"), "error");
     },
+  });
+  const flagMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      patchFeatureFlag(id, { enabled_for_tenant: enabled }),
+    onSuccess: () => {
+      pushToast("Feature flag updated", "success");
+      void flagsQuery.refetch();
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to update feature flag"), "error"),
   });
 
   const externalConnectors = useMemo(
@@ -63,6 +84,39 @@ export function SettingsPage(): JSX.Element {
 
       <Card title="Tenant">
         <div className="text-sm text-slate-700">Current tenant: {tenantId || "not set"}</div>
+        {billingQuery.data ? (
+          <div className="mt-2 text-sm text-slate-700">
+            Plan: <span className="font-semibold">{billingQuery.data.plan.name}</span> | Posts used:{" "}
+            {billingQuery.data.usage.posts_used_current_period} / {billingQuery.data.plan.max_posts_per_month}
+          </div>
+        ) : null}
+      </Card>
+
+      <Card title="Feature Flags (Beta)">
+        {!tenantId ? (
+          <div className="text-sm text-slate-600">Set tenant context to manage flags.</div>
+        ) : flagsQuery.isLoading ? (
+          <div className="text-sm text-slate-600">Loading feature flags...</div>
+        ) : (
+          <div className="space-y-2">
+            {(flagsQuery.data ?? []).map((flag) => (
+              <div key={flag.id} className="flex items-center justify-between rounded border border-slate-200 p-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{flag.key}</div>
+                  <div className="text-xs text-slate-500">{flag.description}</div>
+                </div>
+                <Button
+                  type="button"
+                  className={flag.effective_enabled ? "bg-emerald-600 hover:bg-emerald-500" : ""}
+                  disabled={flagMutation.isPending}
+                  onClick={() => flagMutation.mutate({ id: flag.id, enabled: !flag.enabled_for_tenant })}
+                >
+                  {flag.effective_enabled ? "Enabled" : "Enable"}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card title="API Accounts">

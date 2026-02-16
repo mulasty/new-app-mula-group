@@ -5,7 +5,7 @@ services:
     container_name: control-center-backend
     env_file:
       - .env
-    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "sh /app/scripts/migrate_with_lock.sh && uvicorn main:app --host 0.0.0.0 --port 8000 --log-config /app/logging.json"
     ports:
       - "8000:8000"
     depends_on:
@@ -13,6 +13,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/ready').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     volumes:
       - ./backend:/app
 
@@ -22,7 +27,7 @@ services:
     container_name: control-center-worker
     env_file:
       - .env
-    command: celery -A workers.celery_app.celery_app worker --loglevel=info
+    command: celery -A workers.celery_app.celery_app worker --loglevel=info --autoscale=20,4 -Q publishing,scheduler,analytics
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +58,7 @@ services:
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
       VITE_PROXY_TARGET: ${VITE_PROXY_TARGET:-http://backend:8000}
+      VITE_PLATFORM_ADMIN_EMAILS: ${VITE_PLATFORM_ADMIN_EMAILS:-}
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
     ports:
       - "3000:3000"

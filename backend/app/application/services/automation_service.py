@@ -11,6 +11,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.services.publishing_service import emit_publish_event, publish_post_async
+from app.application.services.ai_quality_service import (
+    apply_quality_to_content_metadata,
+    choose_content_status,
+    evaluate_text,
+    get_or_create_policy,
+)
+from app.application.services.feature_flag_service import is_feature_enabled
 from app.application.services.ai_provider import (
     AIContentRequest,
     AIProviderError,
@@ -469,6 +476,15 @@ def _action_generate_post(db: Session, run: AutomationRun, rule: AutomationRule)
         },
         source=ContentItemSource.AI.value,
     )
+    if is_feature_enabled(db, key="beta_ai_quality", tenant_id=run.company_id):
+        policy = get_or_create_policy(db, company_id=run.company_id, project_id=run.project_id)
+        quality = evaluate_text(
+            text=item.body,
+            title=item.title,
+            policy_json=policy.policy_json,
+        )
+        item.metadata_json = apply_quality_to_content_metadata(metadata_json=item.metadata_json, evaluation=quality)
+        item.status = choose_content_status(current_status=item.status, evaluation=quality)
     db.add(item)
     db.flush()
 

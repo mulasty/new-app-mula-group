@@ -1,6 +1,7 @@
 import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "@/app/layout/AppShell";
+import { AdminPage } from "@/features/admin/pages/AdminPage";
 import { RootFrame } from "@/app/layout/RootFrame";
 import { useAuth } from "@/app/providers/AuthProvider";
 import { RouteErrorBoundary } from "@/app/router/RouteErrorBoundary";
@@ -9,6 +10,8 @@ import { ChannelsPage } from "@/features/channels/pages/ChannelsPage";
 import { CampaignsPage } from "@/features/campaigns/pages/CampaignsPage";
 import { DashboardPage } from "@/features/dashboard/pages/DashboardPage";
 import { OnboardingPage } from "@/features/onboarding/pages/OnboardingPage";
+import { LandingPage } from "@/features/public/pages/LandingPage";
+import { PricingPage } from "@/features/public/pages/PricingPage";
 import { PostsPage } from "@/features/posts/pages/PostsPage";
 import { ProjectsPage } from "@/features/projects/pages/ProjectsPage";
 import { SettingsPage } from "@/features/settings/pages/SettingsPage";
@@ -27,7 +30,11 @@ export function AppRouter(): JSX.Element {
       children: [
         {
           path: "/",
-          element: <Navigate to={isAuthenticated ? "/app" : "/auth"} replace />,
+          element: <LandingPage />,
+        },
+        {
+          path: "/pricing",
+          element: <PricingPage />,
         },
         {
           path: "/auth",
@@ -49,6 +56,7 @@ export function AppRouter(): JSX.Element {
                 { path: "content-studio", element: <ContentStudioPage /> },
                 { path: "calendar", element: <CalendarPage /> },
                 { path: "channels", element: <ChannelsPage /> },
+                { path: "admin", element: <AdminPage /> },
                 { path: "settings", element: <SettingsPage /> },
               ],
             },

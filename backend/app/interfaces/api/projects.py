@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.domain.models.project import Project
 from app.domain.models.user import User, UserRole
+from app.application.services.audit_service import log_audit_event
+from app.application.services.billing_service import enforce_project_limit
 from app.interfaces.api.deps import require_roles, require_tenant_id
 from app.infrastructure.db.session import get_db
 
@@ -24,8 +26,15 @@ def create_project(
     tenant_id: UUID = Depends(require_tenant_id),
     current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
 ) -> dict:
+    enforce_project_limit(db, company_id=tenant_id)
     project = Project(company_id=tenant_id, name=payload.name.strip())
     db.add(project)
+    log_audit_event(
+        db,
+        company_id=tenant_id,
+        action="project.created",
+        metadata={"project_name": project.name, "user_id": str(current_user.id)},
+    )
     db.commit()
     db.refresh(project)
 

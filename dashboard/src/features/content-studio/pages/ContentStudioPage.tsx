@@ -15,6 +15,7 @@ import {
 } from "@/shared/api/automationApi";
 import { getApiErrorMessage } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
+import { evaluateContentAndAttach } from "@/shared/api/aiQualityApi";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { ProjectSwitcher } from "@/shared/components/ProjectSwitcher";
@@ -114,6 +115,14 @@ export function ContentStudioPage(): JSX.Element {
     },
     onError: (error) => pushToast(getApiErrorMessage(error, "Failed to schedule content"), "error"),
   });
+  const qualityMutation = useMutation({
+    mutationFn: (contentId: string) => evaluateContentAndAttach(contentId),
+    onSuccess: () => {
+      pushToast("Quality evaluation completed", "success");
+      queryClient.invalidateQueries({ queryKey: ["contentItems", tenantId, activeProjectId] });
+    },
+    onError: (error) => pushToast(getApiErrorMessage(error, "Failed to evaluate quality"), "error"),
+  });
 
   return (
     <div className="space-y-6">
@@ -205,6 +214,16 @@ export function ContentStudioPage(): JSX.Element {
                       <div className="text-xs text-slate-500">{item.status}</div>
                     </div>
                     <div className="mt-1 line-clamp-3 text-sm text-slate-600">{item.body}</div>
+                    {(() => {
+                      const quality = (item.metadata_json?.quality as Record<string, unknown> | undefined) ?? undefined;
+                      if (!quality) return null;
+                      return (
+                        <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                          Risk: {String(quality.risk_score ?? "n/a")} | Flags:{" "}
+                          {Array.isArray(quality.risk_flags) ? quality.risk_flags.join(", ") : "none"}
+                        </div>
+                      );
+                    })()}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -235,6 +254,14 @@ export function ContentStudioPage(): JSX.Element {
                         onClick={() => scheduleMutation.mutate({ contentId: item.id, publishAt: new Date(scheduleAt).toISOString() })}
                       >
                         Schedule
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-amber-600 px-3 py-1 text-xs hover:bg-amber-500"
+                        disabled={qualityMutation.isPending}
+                        onClick={() => qualityMutation.mutate(item.id)}
+                      >
+                        Evaluate quality
                       </Button>
                     </div>
                   </div>

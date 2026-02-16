@@ -1,8 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AxiosError } from "axios";
 
 import { useTenant } from "@/app/providers/TenantProvider";
+import { useToast } from "@/app/providers/ToastProvider";
+import { createCheckoutSession } from "@/shared/api/billingApi";
+import { getApiErrorMessage } from "@/shared/api/errors";
 import { createProject, listProjects } from "@/shared/api/projectsApi";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { PageHeader } from "@/shared/components/PageHeader";
@@ -13,8 +17,10 @@ import { Input } from "@/shared/components/ui/Input";
 export function ProjectsPage(): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
   const { tenantId } = useTenant();
   const [name, setName] = useState("");
+  const [planLimitHit, setPlanLimitHit] = useState(false);
 
   const projectsQuery = useQuery({
     queryKey: ["projects", tenantId],
@@ -32,6 +38,11 @@ export function ProjectsPage(): JSX.Element {
       }));
       setName("");
     },
+    onError: (error) => {
+      const axiosError = error as AxiosError<{ error_code?: string }>;
+      setPlanLimitHit(axiosError.response?.data?.error_code === "PLAN_LIMIT_EXCEEDED");
+      pushToast(getApiErrorMessage(error, "Failed to create project"), "error");
+    },
   });
 
   return (
@@ -48,6 +59,27 @@ export function ProjectsPage(): JSX.Element {
       ) : (
         <>
           <Card title="Create project">
+            {planLimitHit ? (
+              <div className="mb-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                Plan limit exceeded. Upgrade plan to create more projects.
+                <button
+                  type="button"
+                  className="ml-2 underline"
+                  onClick={async () => {
+                    try {
+                      const checkout = await createCheckoutSession("Pro");
+                      if (checkout.checkout_url) {
+                        window.location.assign(checkout.checkout_url);
+                      }
+                    } catch {
+                      // toast handled by API client
+                    }
+                  }}
+                >
+                  Upgrade now
+                </button>
+              </div>
+            ) : null}
             <div className="flex gap-2">
               <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" />
               <Button

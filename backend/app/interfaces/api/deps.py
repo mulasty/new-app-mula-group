@@ -1,17 +1,31 @@
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import decode_token
 from app.core.tenant import get_current_tenant
 from app.domain.models.user import User, UserRole
 from app.infrastructure.db.session import get_db
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
+
+def get_access_token_from_request(
+    request: Request,
+    bearer_token: str | None = Depends(oauth2_scheme_optional),
+) -> str:
+    if bearer_token:
+        return bearer_token
+    if settings.auth_use_httponly_cookies:
+        cookie_token = request.cookies.get("access_token")
+        if cookie_token:
+            return cookie_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
 def require_tenant_id() -> UUID:
@@ -24,7 +38,7 @@ def require_tenant_id() -> UUID:
     return tenant_id
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(token: str = Depends(get_access_token_from_request), db: Session = Depends(get_db)) -> User:
     try:
         claims = decode_token(token)
     except jwt.PyJWTError as exc:
@@ -59,3 +73,9 @@ def require_roles(*roles: UserRole):
         return current_user
 
     return _dependency
+
+
+def require_platform_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.email.lower() not in settings.platform_admin_email_list:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform admin access required")
+    return current_user

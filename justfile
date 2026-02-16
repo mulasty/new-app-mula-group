@@ -24,3 +24,15 @@ dashboard-lint:
 
 dashboard-test:
     cd dashboard && npm run build
+
+smoke:
+    sh scripts/smoke_all.sh
+
+preflight:
+    sh scripts/preflight_check.sh
+
+deploy-staging:
+    bash scripts/deploy.sh staging
+
+deploy-prod:
+    bash scripts/deploy.sh production

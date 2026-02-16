@@ -12,6 +12,7 @@ import {
   getPublishingSummary,
   getPublishingTimeseries,
 } from "@/shared/api/analyticsApi";
+import { createCheckoutSession, getCurrentBilling } from "@/shared/api/billingApi";
 import { getApiErrorMessage, isEndpointMissing } from "@/shared/api/errors";
 import { listProjects } from "@/shared/api/projectsApi";
 import { PublishingTimeRange } from "@/shared/api/types";
@@ -84,6 +85,11 @@ export function DashboardPage(): JSX.Element {
     enabled: Boolean(tenantId && activeProjectId),
     refetchInterval: 60000,
   });
+  const billingQuery = useQuery({
+    queryKey: ["billingCurrent", tenantId],
+    queryFn: () => getCurrentBilling(),
+    enabled: Boolean(tenantId),
+  });
 
   const projectActions = (
     <ProjectSwitcher
@@ -139,6 +145,33 @@ export function DashboardPage(): JSX.Element {
         />
       ) : (
         <>
+          {billingQuery.data ? (
+            <Card className="border-indigo-200 bg-indigo-50">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-indigo-900">
+                  Plan <span className="font-semibold">{billingQuery.data.plan.name}</span>:{" "}
+                  {billingQuery.data.usage.posts_used_current_period}/{billingQuery.data.plan.max_posts_per_month} posts used.
+                </div>
+                {billingQuery.data.plan.name.toLowerCase() !== "enterprise" ? (
+                  <Button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const response = await createCheckoutSession("Enterprise");
+                        if (response.checkout_url) {
+                          window.location.assign(response.checkout_url);
+                        }
+                      } catch {
+                        // ignored - global api interceptor and page toasts cover feedback.
+                      }
+                    }}
+                  >
+                    Upgrade plan
+                  </Button>
+                ) : null}
+              </div>
+            </Card>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
